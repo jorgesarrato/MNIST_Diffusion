@@ -27,7 +27,7 @@ class overfit_dataset(torch.utils.data.Dataset):
 dataset = overfit_dataset(x_train, y_train)
 dataloader = DataLoader(dataset, batch_size=1)
 
-model = UNet_FM(1, [16, 32, 64], 16)
+model = UNet_FM(1, [64, 128, 256], 128)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor = 0.5, patience = 3, threshold = 0.001)
 

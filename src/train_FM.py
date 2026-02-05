@@ -15,11 +15,11 @@ def train(model, optimizer, epochs, scheduler, dataloader_train , device='cpu'):
             optimizer.zero_grad()
             
             x0 = torch.randn_like(x)
-            t = torch.rand(size = [1])
-            xt = t[:, None, None, None]*x0 + (1-t[:, None, None, None])*x
-            v = xt-x0
+            t = torch.rand(size=(x.shape[0],), device=device)
+            xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
+            v = x-x0
 
-            v_pred = model(xt, t)
+            v_pred = model(xt, t).view_as(v)
 
             loss = nn.MSELoss()(v, v_pred)
 

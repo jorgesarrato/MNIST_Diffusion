@@ -20,8 +20,6 @@ class UNet_FM(nn.Module):
             self.downs.append(nn.Conv2d(in_ch, out_ch, kernel_size = 3, stride = 1, padding = 1))
             self.time_emb_passes.append(nn.Linear(t_emb_size, out_ch))
 
-            curr_channels = out_ch
-
         self.ups = nn.ModuleList()
         self.time_emb_passes_up = nn.ModuleList()
         for i in range(len(filters_arr)-1, 0, -1):
@@ -40,7 +38,7 @@ class UNet_FM(nn.Module):
         self.act_gelu = nn.GELU()
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.last = nn.Conv2d(filters_arr[i-1], in_channels, kernel_size = 3, stride = 1, padding = 1)
+        self.last = nn.Conv2d(filters_arr[0], in_channels, kernel_size = 3, stride = 1, padding = 1)
 
     def forward(self, x, t):
         t_emb = self.time_mlp(t.view(-1, 1))
