@@ -1,7 +1,8 @@
 import torch
 import torch.optim as optim
+import torch.nn as nn
 
-def train(model, optimizer, epochs, scheduler, device='cpu', dataloader_train):
+def train(model, optimizer, epochs, scheduler, dataloader_train , device='cpu'):
     model.train()
     model.to(device)
 
@@ -24,11 +25,12 @@ def train(model, optimizer, epochs, scheduler, device='cpu', dataloader_train):
 
             loss.backward()
             optimizer.step()
-            scheduler.step()
+            scheduler.step(loss.item())
 
-            epoc_loss+=loss.item()
+            total_loss+=loss.item()
 
         avg_loss = total_loss/len(dataloader_train)
+        print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}')
         
 
             
