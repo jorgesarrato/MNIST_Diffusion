@@ -3,38 +3,67 @@ import torch.nn as nn
 import torch.optim as optim
 
 class UNet_FM(nn.Module):
-    def __init__(self, in_channels, filters_arr, kerne_size, stride, padding):
+    def __init__(self, in_channels, filters_arr, t_emb_size):
         super().__init__()
 
-        self.downs = nn.ModuleList()
-        for i in range(len(filters_arr)):
-            in_ch = in_chanels if i == 0 else filters_arr[i-1]
-            out_ch = filters_arr[i]
-            self.downs.append(
-                nn.Sequential(
-                    nn.Conv2d(in_ch, out_ch, kernel_size, stride, padding),
-                    nn.GELU(),
-                )
-            )
+        self.time_mlp = nn.Sequential(
+            nn.Linear(1, t_emb_size),
+            nn.GELU(),
+            nn.Linear(t_emb_size, t_emb_size)
+        )
 
-            curr_channels = filters
+        self.downs = nn.ModuleList()
+        self.time_emb_passes = nn.ModuleList()
+        for i in range(len(filters_arr)):
+            in_ch = in_channels if i == 0 else filters_arr[i-1]
+            out_ch = filters_arr[i]
+            self.downs.append(nn.Conv2d(in_ch, out_ch, kernel_size = 3, stride = 1, padding = 1))
+            self.time_emb_passes.append(nn.Linear(t_emb_size, out_ch))
+
+            curr_channels = out_ch
+
+        self.mid = nn.Conv2d(filters_arr[-1], filters_arr[-1], kernel_size = 3, stride = 1, padding = 1)
+        self.mid_time_emb_pass = nn.Linear(t_emb_size, out_ch)
 
         self.ups = nn.ModuleList()
-        for i in range(len(filters_arr), -1):
-            in_ch = filterrs_arr[i]
-            out_ch = filters_arr[i-1]
+        self.time_emb_passes_up = nn.ModuleList()
+        for i in range(len(filters_arr)-1, -1, -1):
+            in_ch = filters_arr[i]
+            out_ch = in_channels if i == 0 else filters_arr[i-1]
 
-            #TODO: upsampling and convolve with skips
+            self.ups.append(
+                    nn.ModuleDict(
+                        {'upsample': nn.ConvTranspose2d(in_ch, out_ch, kernel_size = 2, stride = 2, padding = 0),
+                         'convskip': nn.Conv2d(out_ch*2, out_ch, kernel_size = 3, stride = 1, padding = 1)
+                        }
+                        )
+                    )
+            self.time_emb_passes_up.append(nn.Linear(t_emb_size, out_ch))
 
-            #TODO: time embeddings
+        self.act_gelu = nn.GELU()
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-    def forward(self, x):
+        self.last = nn.Conv2d(in_channels, in_channels, kernel_size = 3, stride = 1, padding = 1)
+
+    def forward(self, x, t):
+        t_emb = self.time_mlp(t.view(-1, 1))
+
         skips = []
 
-        for down in self.downs:
+        for i,down in enumerate(self.downs):
             x = down(x)
+            x = self.act_gelu(x + self.time_emb_passes[i](t_emb)[:, :, None, None])
             skips.append(x)
+            x = self.pool(x)
 
-        #TODO: pass through decoder
+        x = self.act_gelu(self.mid(x) + self.mid_time_emb_pass(t_emb)[:, :, None, None])
 
-        return x
+        for i,up in enumerate(self.ups):
+            x = up['upsample'](x)
+
+            skip = skips.pop()
+            x = torch.cat([x, skip], dim=1)
+
+            x = self.act_gelu(up['convskip'](x) + self.time_emb_passes_up[i](t_emb)[:, :, None, None])
+
+        return self.last(x)
