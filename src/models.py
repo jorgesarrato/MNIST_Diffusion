@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 
 class UNet_FM(nn.Module):
     def __init__(self, in_channels, filters_arr, t_emb_size):
