@@ -25,11 +25,11 @@ def train(model, optimizer, epochs, scheduler, dataloader_train , device='cpu'):
 
             loss.backward()
             optimizer.step()
-            scheduler.step(loss.item())
 
             total_loss+=loss.item()
 
         avg_loss = total_loss/len(dataloader_train)
+        scheduler.step(avg_loss)
         print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}')
         
 
