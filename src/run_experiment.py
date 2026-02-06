@@ -23,9 +23,9 @@ def run():
     val_dataset = mnist_dataset(x_val, y_val)
     test_dataset = mnist_dataset(x_test, y_test)
 
-    train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=Config.data_config['batch_size'])
-    test_loader = DataLoader(test_dataset, batch_size=Config.data_config['batch_size'])
+    train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True, num_workers=Config.data_config['num_workers'])
+    val_loader = DataLoader(val_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'])
+    test_loader = DataLoader(test_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'])
 
     model = get_model(Config.model_config)
     optimizer = torch.optim.Adam(model.parameters(), lr=Config.training_config['lr'])

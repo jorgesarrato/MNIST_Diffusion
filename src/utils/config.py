@@ -9,11 +9,11 @@ class Config:
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM"
-    
+
     data_config = {
             "data_dir": DATA_DIR,
             "batch_size": 128,
-            "num_workers": 4,
+            "num_workers": 2,
             "val_split": 0.1
              }
     model_config = {
