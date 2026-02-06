@@ -17,11 +17,6 @@ def run():
     x_test = load_mnist_images(os.path.join(Config.DATA_DIR, 't10k-images-idx3-ubyte'))
     y_test = load_mnist_labels(os.path.join(Config.DATA_DIR, 't10k-labels-idx1-ubyte'))
 
-    print(x_train.shape)
-    print(y_train.shape)
-    print(x_test.shape)
-    print(y_test.shape)
-
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
     train_dataset = mnist_dataset(x_train, y_train)
