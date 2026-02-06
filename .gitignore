@@ -1,6 +1,8 @@
 .env
 mnist_env
 mlflow.db
+*.err
+*.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
