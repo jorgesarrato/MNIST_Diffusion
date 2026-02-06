@@ -15,7 +15,7 @@ y_train = load_mnist_labels(os.path.join(Config.DATA_DIR, 'train-labels-idx1-uby
 
 class overfit_dataset(torch.utils.data.Dataset):
     def __init__(self, x_train, y_train):
-        self.x_train = torch.tensor(x_train, dtype=torch.float32)
+        self.x_train = torch.tensor(x_train, dtype=torch.float32)/255
         self.y_train = torch.tensor(y_train, dtype=torch.float32)
 
     def __len__(self):
@@ -27,9 +27,9 @@ class overfit_dataset(torch.utils.data.Dataset):
 dataset = overfit_dataset(x_train, y_train)
 dataloader = DataLoader(dataset, batch_size=1)
 
-model = UNet_FM(1, [64, 128, 256], 128)
+model = UNet_FM(1, [256, 521, 1024], 256)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor = 0.5, patience = 3, threshold = 0.001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor = 0.1, patience = 5, threshold = 0.001)
 
 
-train(model, optimizer, 30, scheduler, dataloader, device)
+train(model, optimizer, 300, scheduler, dataloader, device)
