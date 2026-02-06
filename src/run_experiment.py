@@ -3,6 +3,7 @@ import torch
 from utils.config import Config
 from utils.read_MNIST import load_mnist_images, load_mnist_labels
 from utils.model_parser import get_model
+from utils.opt_parser import get_optimizer
 from utils.datasets import mnist_dataset
 from train_FM import train, evaluate
 from torch.utils.data import DataLoader
@@ -28,7 +29,7 @@ def run():
     test_loader = DataLoader(test_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'])
 
     model = get_model(Config.model_config)
-    optimizer = torch.optim.Adam(model.parameters(), lr=Config.training_config['lr'])
+    optimizer = get_optimizer(model, Config.training_config)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         factor=Config.training_config['scheduler_factor'], 

@@ -1,12 +1,12 @@
 #!/bin/bash
 #############################
 #SBATCH -J FM
-#SBATCH -n 2
+#SBATCH -n 1
 #SBATCH -t 0-06:00:00
 #SBATCH -o %j.out
 #SBATCH -e %j.err
 #SBATCH --gres gpu:1
-#SBATCH --mem 20G
+#SBATCH --mem 4G
 
 #SBATCH -D .
 #############################

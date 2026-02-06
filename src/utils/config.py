@@ -13,18 +13,19 @@ class Config:
     data_config = {
             "data_dir": DATA_DIR,
             "batch_size": 128,
-            "num_workers": 2,
+            "num_workers": 1,
             "val_split": 0.1
              }
     model_config = {
             "type": "UNet_FM",
-            "filters_arr": [128, 256, 512],
+            "filters_arr": [256, 512, 1024],
             "t_emb_size": 256,
         }
     training_config = {
             "lr": 1e-4,
             "epochs": 50,
             "optimizer": "AdamW",
+            "wight_decay": 0.01,
             "scheduler_factor": 0.5,
             "patience": 5,
         }
