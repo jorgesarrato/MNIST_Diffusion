@@ -5,3 +5,27 @@ load_dotenv()
 
 class Config:
     DATA_DIR = os.getenv("DATA_DIR")
+
+    RANDOM_SEED = 46020
+
+    experiment_name = "UNet_FM"
+    
+    data_config = {
+            "data_dir": DATA_DIR,
+            "batch_size": 128,
+            "num_workers": 4,
+            "val_split": 0.1
+             }
+    model_config = {
+            "type": "UNet_FM",
+            "filters_arr": [128, 256, 512],
+            "t_emb_size": 256,
+        }
+    training_config = {
+            "lr": 1e-4,
+            "epochs": 50,
+            "optimizer": "AdamW",
+            "scheduler_factor": 0.5,
+            "patience": 5,
+        }
+

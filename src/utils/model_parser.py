@@ -8,7 +8,7 @@ def get_model(model_config):
 
     model_type = model_config.get("type")
     
-    if model_type not in MODEL_MAP:
+    if model_type not in MODEL_MAP.keys():
         raise ValueError(f"Model type '{model_type}' not found in MODEL_MAP. "
                          f"Available types: {list(MODEL_MAP.keys())}")
 

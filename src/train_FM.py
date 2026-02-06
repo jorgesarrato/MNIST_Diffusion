@@ -8,20 +8,20 @@ def evaluate(model, dataloader_val, device='cpu'):
     model.eval()
 
     total_loss_val = 0
+    with torch.no_grad():
+        for x, y in dataloader_val:
+            x = x.to(device)
 
-    for x, y in dataloader_val:
-        x = x.to(device)
+            x0 = torch.randn_like(x)
+            t = torch.rand(size=(x.shape[0],), device=device)
+            xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
+            v = x-x0
 
-        x0 = torch.randn_like(x)
-        t = torch.rand(size=(x.shape[0],), device=device)
-        xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
-        v = x-x0
+            v_pred = model(xt, t).view_as(v)
 
-        v_pred = model(xt, t).view_as(v)
+            loss = nn.MSELoss()(v, v_pred)
 
-        loss = nn.MSELoss()(v, v_pred)
-
-        total_loss_val += loss.item()
+            total_loss_val += loss.item()
 
     return total_loss_val/len(dataloader_val)
 
