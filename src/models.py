@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class UNet_FM(nn.Module):
-    def __init__(self, in_channels, filters_arr, t_emb_size):
+    def __init__(self, filters_arr, t_emb_size, in_channels=1):
         super().__init__()
 
         self.time_mlp = nn.Sequential(

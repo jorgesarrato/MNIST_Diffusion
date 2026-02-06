@@ -1,6 +1,7 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import mlflow
 
 
 def evaluate(model, dataloader_val, device='cpu'):
@@ -52,14 +53,20 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
             total_loss += loss.item()
 
         avg_loss = total_loss/len(dataloader_train)
+        current_lr = optimizer.param_groups[0]['lr']
+
+        mlflow.log_metric("train_loss", avg_loss, step=epoch)
+        mlflow.log_metric("learning_rate", current_lr, step=epoch)
 
         if dataloader_val is not None:
-            avg_loss_val = evaluate()
+            avg_loss_val = evaluate(model, dataloader_val, device)
 
-            print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, Val_Loss: {avg_loss_val:.6f}, LR: {optimizer.param_groups[0]["lr"]:.6f}')
+            mlflow.log_metric("val_loss", avg_loss_val, step=epoch)
+
+            print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, Val_Loss: {avg_loss_val:.6f}, LR: {current_lr:.6f}')
             scheduler.step(avg_loss_val)
 
         else:
-            print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, LR: {optimizer.param_groups[0]["lr"]:.6f}')
+            print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, LR: {current_lr:.6f}')
             scheduler.step(avg_loss)
         
