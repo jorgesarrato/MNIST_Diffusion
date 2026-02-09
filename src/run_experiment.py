@@ -1,17 +1,27 @@
-import mlflow
+import os
+
+from sklearn.model_selection import train_test_split
 import torch
+from torch.utils.data import DataLoader
+import mlflow
+
 from utils.config import Config
 from utils.read_MNIST import load_mnist_images, load_mnist_labels
 from utils.model_parser import get_model
 from utils.opt_parser import get_optimizer
 from utils.datasets import mnist_dataset
+from utils.visualize import create_flow_animation
 from train_FM import train, evaluate
-from torch.utils.data import DataLoader
-from sklearn.model_selection import train_test_split
-import os
+from evolve import save_flow_evolution
 
 def run():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    #Set seed
+    torch.manual_seed(Config.RANDOM_SEED)
+    if device == 'cuda':
+        torch.cuda.manual_seed_all(Config.RANDOM_SEED)
+
 
     x_train = load_mnist_images(os.path.join(Config.DATA_DIR, 'train-images-idx3-ubyte'))
     y_train = load_mnist_labels(os.path.join(Config.DATA_DIR,'train-labels-idx1-ubyte'))
@@ -56,11 +66,16 @@ def run():
         )
 
         test_loss = evaluate(model, test_loader, device)
-
+        print(f"Test Loss: {test_loss:.6f}")
         mlflow.log_metric("test_loss", test_loss, step=Config.training_config['epochs'])
 
         torch.save(model.state_dict(), "model_final.pth")
         mlflow.log_artifact("model_final.pth")
+
+        for ii in range(5):
+            x_base = torch.randn(1, 1, 28, 28).to(device)
+            snapshots = save_flow_evolution(model, x=x_base, device=device)
+            create_flow_animation(snapshots, filename = f"flow_evolution_{ii}.gif")
 
 if __name__ == "__main__":
     run()
