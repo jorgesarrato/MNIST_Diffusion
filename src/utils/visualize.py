@@ -41,8 +41,14 @@ def create_flow_animation(snapshots, filename='flow_evolution.gif', timing_mode 
         snapshots = [snapshots[int(i*len(snapshots)/n_steps)] for i in range(n_steps)]
     elif timing_mode == 'quadratic':
         snapshots = [snapshots[int(i**2*len(snapshots)/n_steps**2)] for i in range(n_steps)]
-    elif timing_mode == 'exponential':
-        snapshots = [snapshots[int(2**i*len(snapshots)/2**n_steps)] for i in range(n_steps)]
+    elif timing_mode == 'inv_quadratic':
+        snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (len(snapshots) - 1))] for i in range(n_steps)]
+    elif timing_mode == 'logarithmic':
+        max_log = np.log10(n_steps)
+        snapshots = [
+            snapshots[int((1 - np.log10(n_steps - i) / max_log) * (len(snapshots) - 1))] 
+            for i in range(n_steps)
+        ]
     else:
         raise ValueError(f"Timing mode {timing_mode} not supported.")
 

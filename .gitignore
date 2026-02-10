@@ -5,6 +5,7 @@ mlruns*
 model_final.pth
 *.err
 *.out
+*.gif
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
