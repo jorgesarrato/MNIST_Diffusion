@@ -4,14 +4,13 @@ import numpy as np
 import mlflow
 
 def visualize_flow_step(snapshot, downsample_factor = 4, axes = None):
-    if ax is None:
+    if axes is None:
         fig, ax = plt.subplots()
     else:
         ax = axes
 
     image = snapshot['image']
     v_field = snapshot['v_field']
-
 
     ax.imshow(image, cmap='magma', origin='upper')
 
@@ -34,14 +33,26 @@ def visualize_flow_step(snapshot, downsample_factor = 4, axes = None):
     return ax
 
 
-def create_flow_animation(snapshots, filename='flow_evolution.gif'):
+def create_flow_animation(snapshots, filename='flow_evolution.gif', timing_mode = 'linear', n_steps = -1):
+    if (n_steps <= 0) or (n_steps > len(snapshots)):
+        n_steps = len(snapshots)
+
+    if timing_mode == 'linear':
+        snapshots = [snapshots[int(i*len(snapshots)/n_steps)] for i in range(n_steps)]
+    elif timing_mode == 'quadratic':
+        snapshots = [snapshots[int(i**2*len(snapshots)/n_steps**2)] for i in range(n_steps)]
+    elif timing_mode == 'exponential':
+        snapshots = [snapshots[int(2**i*len(snapshots)/2**n_steps)] for i in range(n_steps)]
+    else:
+        raise ValueError(f"Timing mode {timing_mode} not supported.")
+
     fig, ax = plt.subplots(figsize=(6, 6))
     
     def update(i):
         ax.clear()
         visualize_flow_step(snapshots[i], axes=ax)
 
-    anim = FuncAnimation(fig, update, frames=len(snapshots['t']), interval=100)
+    anim = FuncAnimation(fig, update, frames=len(snapshots), interval=100)
     anim.save(filename, writer='pillow')
     plt.close()
     print(f"Saved animation to {filename}")

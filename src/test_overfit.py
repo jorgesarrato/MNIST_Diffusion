@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from models import UNet_FM
+from models import UNet_FM, UNet_FM_Residuals
 from train_FM import train
 import os
 
@@ -17,9 +17,9 @@ y_train = load_mnist_labels(os.path.join(Config.DATA_DIR, 'train-labels-idx1-uby
 dataset = mnist_dataset(x_train, y_train)
 dataloader = DataLoader(dataset, batch_size=4)
 
-model = UNet_FM([32, 64, 128], 64)
+model = UNet_FM_Residuals([32, 64, 128], 64)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor = 0.1, patience = 5, threshold = 0.001)
 
 
-train(model, optimizer, 300, scheduler, dataloader, device)
+train(model, optimizer, 100, scheduler, dataloader, device)

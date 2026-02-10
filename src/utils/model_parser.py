@@ -1,7 +1,9 @@
-from models import UNet_FM  # Import your model classes here
+from models import UNet_FM_Residuals, UNet_FM
+
 
 MODEL_MAP = {
     "UNet_FM": UNet_FM,
+    "UNet_FM_Residuals": UNet_FM_Residuals
 }
 
 def get_model(model_config):

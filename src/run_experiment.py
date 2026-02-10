@@ -74,8 +74,10 @@ def run():
 
         for ii in range(5):
             x_base = torch.randn(1, 1, 28, 28).to(device)
-            snapshots = save_flow_evolution(model, x=x_base, device=device)
-            create_flow_animation(snapshots, filename = f"flow_evolution_{ii}.gif")
+            snapshots = save_flow_evolution(model, x=x_base, device=device, num_steps=1000)
+            create_flow_animation(snapshots, filename = f"flow_evolution_linear_{ii}.gif", n_steps=100, timing_mode='linear')
+            create_flow_animation(snapshots, filename = f"flow_evolution_quad_{ii}.gif", n_steps=100, timing_mode='quadratic')
+            create_flow_animation(snapshots, filename = f"flow_evolution_exp_{ii}.gif", n_steps=100, timing_mode='exponential')
 
 if __name__ == "__main__":
     run()

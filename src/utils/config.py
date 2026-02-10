@@ -16,14 +16,20 @@ class Config:
             "num_workers": 1,
             "val_split": 0.1
              }
+    """model_config = {
+            "type": "UNet_FM",
+            "filters_arr": [256, 512, 1024],
+            "t_emb_size": 512,
+        }
+    """
     model_config = {
             "type": "UNet_FM",
             "filters_arr": [256, 512, 1024],
-            "t_emb_size": 256,
+            "t_emb_size": 512,
         }
     training_config = {
             "lr": 1e-4,
-            "epochs": 50,
+            "epochs": 30,
             "optimizer": "AdamW",
             "wight_decay": 0.01,
             "scheduler_factor": 0.5,

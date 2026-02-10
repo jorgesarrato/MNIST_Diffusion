@@ -1,6 +1,8 @@
 .env
 mnist_env
 mlflow.db
+mlruns*
+model_final.pth
 *.err
 *.out
 
