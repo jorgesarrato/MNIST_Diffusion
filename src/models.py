@@ -2,8 +2,38 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ResidualAttentionBlock(nn.Module):
+    def __init__(self, ch, n_channels_group=8):
+        super().__init__()
+        self.gn = nn.GroupNorm(n_channels_group, ch)
+        self.k = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
+        self.q = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
+        self.v = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
+        self.final = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
+
+        self.act_softmax = nn.Softmax(dim=-1)
+
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+
+        x_gn = self.gn(x)
+
+        k = self.k(x_gn).view(b, c, -1)
+        q = self.q(x_gn).view(b, c, -1)
+        v = self.v(x_gn).view(b, c, -1)
+
+        attn = torch.bmm(q.transpose(1,2), k) * (c**(-1/2))
+        attn = self.act_softmax(attn)
+
+        attn = torch.bmm(v, attn.transpose(1,2))
+        attn = attn.view(b, c, h, w)
+
+        return self.final(attn) + x
+
+
 class UNet_FM(nn.Module):
-    def __init__(self, filters_arr, t_emb_size, in_channels=1):
+    def __init__(self, filters_arr, t_emb_size, in_channels=1, n_channels_group = 8, attn = False):
         super().__init__()
 
         self.time_mlp = nn.Sequential(
@@ -19,6 +49,8 @@ class UNet_FM(nn.Module):
             out_ch = filters_arr[i]
             self.downs.append(nn.Conv2d(in_ch, out_ch, kernel_size = 3, stride = 1, padding = 1))
             self.time_emb_passes.append(nn.Linear(t_emb_size, out_ch))
+
+        self.mid = ResidualAttentionBlock(filters_arr[-1], n_channels_group=n_channels_group) if attn else nn.Identity()
 
         self.ups = nn.ModuleList()
         self.time_emb_passes_up = nn.ModuleList()
@@ -51,6 +83,8 @@ class UNet_FM(nn.Module):
             if i < len(self.downs)-1:
                 skips.append(x)
                 x = self.pool(x)
+
+        x = self.mid(x)
 
         for i,up in enumerate(self.ups):
             x = up['upsample'](x)
@@ -88,7 +122,7 @@ class ResidualBlock(nn.Module):
         return x + x_in
 
 class UNet_FM_Residuals(nn.Module):
-    def __init__(self, filters_arr, t_emb_size, in_channels=1, n_channels_group=8):
+    def __init__(self, filters_arr, t_emb_size, in_channels=1, n_channels_group=8, attn = False):
         super().__init__()
 
         self.time_mlp = nn.Sequential(
@@ -107,9 +141,11 @@ class UNet_FM_Residuals(nn.Module):
                     'residual':ResidualBlock(out_ch, t_emb_size, n_channels_group=n_channels_group)
                     }
                     )
-                )
-                
+                )   
 
+        self.mid_res = ResidualBlock(filters_arr[-1], t_emb_size, n_channels_group=n_channels_group)
+        self.mid_attn = ResidualAttentionBlock(filters_arr[-1], n_channels_group=n_channels_group) if attn else nn.Identity()
+                        
         self.ups = nn.ModuleList()
         for i in range(len(filters_arr)-1, 0, -1):
             in_ch = filters_arr[i]
@@ -140,6 +176,9 @@ class UNet_FM_Residuals(nn.Module):
             if i < len(self.downs)-1:
                 skips.append(x)
                 x = self.pool(x)
+
+        x = self.mid_res(x, t_emb)
+        x = self.mid_attn(x)
 
         for i,up in enumerate(self.ups):
             x = up['upsample'](x)
