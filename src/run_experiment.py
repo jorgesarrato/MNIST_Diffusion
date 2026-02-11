@@ -79,7 +79,7 @@ def run():
             mlflow.log_artifact(f"snapshots_{ii}.pt")
             create_flow_animation(snapshots, filename = f"flow_evolution_linear_{ii}.gif", n_steps=100, timing_mode='linear')
             create_flow_animation(snapshots, filename = f"flow_evolution_inv_quad_{ii}.gif", n_steps=100, timing_mode='inv_quadratic')
-            create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=1, timing_mode='logarithmic')
+            create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
 if __name__ == "__main__":
     run()
