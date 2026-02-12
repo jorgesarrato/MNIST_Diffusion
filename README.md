@@ -21,7 +21,7 @@ The following visualization demonstrates the generation process over $t \in [0, 
 * **Row 1 (Residual U-Net):** Produces sharp, structurally sound digits with smooth velocity transitions.
 * **Row 2 (Base U-Net):** Exhibits significant artifacts, struggling to resolve the fine topology of the digits.
 
-![Model Comparison](models_comparison.gif)
+![Model Comparison](architecture_comparison.gif)
 
 ---
 
