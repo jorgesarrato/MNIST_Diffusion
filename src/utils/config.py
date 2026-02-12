@@ -9,6 +9,7 @@ class Config:
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM"
+    run_name = "Residuals+Attention"
 
     data_config = {
             "data_dir": DATA_DIR,

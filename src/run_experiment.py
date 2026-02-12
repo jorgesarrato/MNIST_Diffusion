@@ -17,11 +17,9 @@ from evolve import save_flow_evolution
 def run():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    #Set seed
     torch.manual_seed(Config.RANDOM_SEED)
     if device == 'cuda':
         torch.cuda.manual_seed_all(Config.RANDOM_SEED)
-
 
     x_train = load_mnist_images(os.path.join(Config.DATA_DIR, 'train-images-idx3-ubyte'))
     y_train = load_mnist_labels(os.path.join(Config.DATA_DIR,'train-labels-idx1-ubyte'))
@@ -47,8 +45,9 @@ def run():
     )
 
     mlflow.set_experiment(Config.experiment_name)
+
     
-    with mlflow.start_run():
+    with mlflow.start_run(run_name=Config.run_name):
 
         mlflow.log_params(Config.model_config)
         mlflow.log_params(Config.training_config)
