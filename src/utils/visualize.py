@@ -3,9 +3,6 @@ from matplotlib.animation import FuncAnimation
 import numpy as np
 import mlflow
 
-import numpy as np
-import matplotlib.pyplot as plt
-
 def visualize_flow_step(snapshot, downsample_factor=4, axes=None):
     if axes is None:
         fig, ax = plt.subplots()
@@ -71,7 +68,8 @@ def create_flow_animation(snapshots, filename='flow_evolution.gif', timing_mode 
     anim.save(filename, writer='pillow')
     plt.close()
     print(f"Saved animation to {filename}")
-    mlflow.log_artifact(filename)
+    if mlflow.active_run():
+        mlflow.log_artifact(filename)
 
     return filename
 
