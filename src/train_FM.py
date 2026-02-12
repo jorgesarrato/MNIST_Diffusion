@@ -10,13 +10,14 @@ def evaluate(model, dataloader_val, device='cpu'):
     with torch.no_grad():
         for x, y in dataloader_val:
             x = x.to(device)
+            y = y.to(device)
 
             x0 = torch.randn_like(x)
             t = torch.rand(size=(x.shape[0],), device=device)
             xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
             v = x-x0
 
-            v_pred = model(xt, t).view_as(v)
+            v_pred = model(xt, t, y).view_as(v)
 
             loss = nn.MSELoss()(v, v_pred)
 

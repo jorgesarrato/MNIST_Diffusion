@@ -9,7 +9,7 @@ class Config:
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM_conditioned"
-    run_name = "Base_test"
+    run_name = "Base"
 
     data_config = {
             "data_dir": DATA_DIR,
@@ -18,10 +18,10 @@ class Config:
             "val_split": 0.1
              }
     model_config = {
-            "type": "UNet_FM_Residuals",
-            "filters_arr": [32, 64, 128],
-            "t_emb_size": 64,
-            "label_emb_size": 32,
+            "type": "UNet_FM",
+            "filters_arr": [256, 512, 1024],
+            "t_emb_size": 512,
+            "label_emb_size": 256,
             "attn": False
         }
     training_config = {

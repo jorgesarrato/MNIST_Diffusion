@@ -1,6 +1,6 @@
 import torch
 
-def save_flow_evolution(model, x = None, device = 'cpu', num_steps=50):
+def save_flow_evolution(model, x = None, label = None, device = 'cpu', num_steps=50):
     if x is None:
         x = torch.randn(1, 1, 28, 28).to(device)
     else:
@@ -20,7 +20,13 @@ def save_flow_evolution(model, x = None, device = 'cpu', num_steps=50):
 
             if i < num_steps:
                 t_tensor = torch.tensor([t_val], device=device)
-                v = model(x, t_tensor)
+
+                if label is not None:
+                    label_tensor = torch.tensor([label], device=device, dtype=torch.int32)
+                    v = model(x, t_tensor, label_tensor)
+                else:
+                    v = model(x, t_tensor)
+                    
                 x = x + v * dt
                 snapshot['v_field'] = v.cpu().squeeze()
             else:
