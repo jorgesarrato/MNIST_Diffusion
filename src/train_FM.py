@@ -35,6 +35,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
         model.train()
         for x, y in dataloader_train:
             x = x.to(device)
+            y = y.to(device)
 
             optimizer.zero_grad()
             
@@ -43,7 +44,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
             xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
             v = x-x0
 
-            v_pred = model(xt, t).view_as(v)
+            v_pred = model(xt, t, y).view_as(v)
 
             loss = nn.MSELoss()(v, v_pred)
 

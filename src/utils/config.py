@@ -8,8 +8,8 @@ class Config:
 
     RANDOM_SEED = 46020
 
-    experiment_name = "UNet_FM"
-    run_name = "Residuals+Attention"
+    experiment_name = "UNet_FM_conditioned"
+    run_name = "Base_test"
 
     data_config = {
             "data_dir": DATA_DIR,
@@ -17,17 +17,12 @@ class Config:
             "num_workers": 1,
             "val_split": 0.1
              }
-    """model_config = {
-            "type": "UNet_FM",
-            "filters_arr": [256, 512, 1024],
-            "t_emb_size": 512,
-        }
-    """
     model_config = {
             "type": "UNet_FM_Residuals",
-            "filters_arr": [256, 512, 1024],
-            "t_emb_size": 512,
-            "attn": True
+            "filters_arr": [32, 64, 128],
+            "t_emb_size": 64,
+            "label_emb_size": 32,
+            "attn": False
         }
     training_config = {
             "lr": 1e-4,
