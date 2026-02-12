@@ -70,14 +70,15 @@ def run():
 
         torch.save(model.state_dict(), "model_final.pth")
         mlflow.log_artifact("model_final.pth")
+        
+        x_base = torch.randn(1, 1, 28, 28).to(device)
+
+        labels = [1,2,3,4,5]
 
         for ii in range(5):
-            x_base = torch.randn(1, 1, 28, 28).to(device)
-            snapshots = save_flow_evolution(model, x=x_base, device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=labels[ii], device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_{ii}.pt")
             mlflow.log_artifact(f"snapshots_{ii}.pt")
-            create_flow_animation(snapshots, filename = f"flow_evolution_linear_{ii}.gif", n_steps=100, timing_mode='linear')
-            create_flow_animation(snapshots, filename = f"flow_evolution_inv_quad_{ii}.gif", n_steps=100, timing_mode='inv_quadratic')
             create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
 if __name__ == "__main__":

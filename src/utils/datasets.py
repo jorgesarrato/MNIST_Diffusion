@@ -5,7 +5,7 @@ class mnist_dataset(torch.utils.data.Dataset):
         self.x_train = torch.tensor(x_train, dtype=torch.float32)/255
         if self.x_train.ndim == 3:
             self.x_train = self.x_train.unsqueeze(1)
-        self.y_train = torch.tensor(y_train, dtype=torch.float32)
+        self.y_train = torch.tensor(y_train, dtype=torch.int32)
 
     def __len__(self):
         return len(self.x_train)
