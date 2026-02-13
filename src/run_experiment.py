@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 import mlflow
 
 from utils.config import Config
-from utils.read_MNIST import load_mnist_images, load_mnist_labels
+from utils.readers import load_mnist_images, load_mnist_labels
 from utils.model_parser import get_model
 from utils.opt_parser import get_optimizer
 from utils.datasets import mnist_dataset

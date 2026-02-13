@@ -5,6 +5,7 @@ load_dotenv()
 
 class Config:
     DATA_DIR = os.getenv("DATA_DIR")
+    DATA_NYU_DIR = os.getenv("DATA_NYU_DIR")
 
     RANDOM_SEED = 46020
 

@@ -1,4 +1,4 @@
-from utils.read_MNIST import *
+from utils.readers import *
 from utils.config import Config
 from utils.datasets import mnist_dataset
 from torch.utils.data import DataLoader

@@ -2,6 +2,11 @@ import torch
 import torch.nn as nn
 import mlflow
 
+def nyu_depth_tensorize(x, y):
+    x = torch.tensor(x, dtype=torch.float32)/255
+    y = torch.tensor(y, dtype=torch.float32)/10
+    return x, y
+
 
 def evaluate(model, dataloader_val, device='cpu'):
     model.eval()
@@ -11,6 +16,8 @@ def evaluate(model, dataloader_val, device='cpu'):
         for x, y in dataloader_val:
             x = x.to(device)
             y = y.to(device)
+
+            x, y = nyu_depth_tensorize(x, y)
 
             x0 = torch.randn_like(x)
             t = torch.rand(size=(x.shape[0],), device=device)
@@ -36,6 +43,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
         for x, y in dataloader_train:
             x = x.to(device)
             y = y.to(device)
+
+            x,y = nyu_depth_tensorize(x, y)
 
             optimizer.zero_grad()
             
