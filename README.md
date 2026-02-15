@@ -1,44 +1,42 @@
-# Flow Matching for MNIST: Residual vs. Base U-Net
+# Conditional Flow Matching: Semantic Control in Generative ODEs
 
-This repository implements **Flow Matching (FM)** for generating MNIST digits. The project specifically explores the performance gap between a standard Convolutional U-Net and a Residual U-Net architecture when learning the continuous velocity fields required for probability path reconstruction.
+This branch extends the previous Flow Matching implementation by introducing **Conditional Generation**. While the unconditional model learned the general distribution of MNIST, this version allows for precise control over the output by conditioning the learned velocity field on target digit labels.
 
-## 🚀 Overview
+## 🔬 The Evolution: Unconditional to Conditional
 
-Flow Matching is a simulation-free approach to training Continuous Normalizing Flows. Unlike traditional Diffusion models that rely on Gaussian noise schedules, Flow Matching learns to predict the **velocity vector field** $v_t(x)$ that pushes a simple base distribution (noise) toward a target distribution (MNIST digits).
+The core task of Flow Matching remains: learning a vector field $v_t(x)$ that transports noise to data. However, the model now accepts a label $y$, effectively learning a class-conditional probability path.
 
-### Key Features
-* **Dual Architectures:** Comparative implementation of a standard U-Net and a Residual U-Net with GroupNorm and GELU activations.
-* **Flow Visualization:** Custom `matplotlib` engine to visualize velocity fields using block-averaged gradients.
-* **Experiment Tracking:** Full integration with **MLflow** for hyperparameter logging and artifact (snapshot) management.
-* **Cinematic Rendering:** Tools to generate comparison GIFs with linear, quadratic, or logarithmic temporal pacing.
-
----
-
-## 📊 Results: Residual vs. Base U-Net
-
-The following visualization demonstrates the generation process over $t \in [0, 1]$. 
-
-* **Row 1 (Residual U-Net):** Produces sharp, structurally sound digits with smooth velocity transitions.
-* **Row 2 (Base U-Net):** Exhibits significant artifacts, struggling to resolve the fine topology of the digits.
-
-![Model Comparison](architecture_comparison.gif)
+### Key Architectural Updates:
+* **Label Embedding:** Introduced an `nn.Embedding` layer that maps digit classes (0–9) into a high-dimensional semantic space.
+* **Feature Fusion:** The time embedding and label embedding are concatenated and injected into the `ResidualBlocks` via a projection layer.
+* **Deterministic Noise Testing:** By starting multiple conditions from the *exact same* latent noise realization, we can isolate the effect of the conditioning signal on the flow geometry.
 
 ---
 
-## 🏗️ Architectures
+## 📺 Visualizing Controlled Flows
 
-### 1. Residual U-Net (Recommended)
-Uses `ResidualBlock` modules that facilitate better gradient flow. This is crucial for Flow Matching as the network must learn precise velocities at every time step $t$.
-* **Time Embedding:** MLP embeddings injected into every block.
-* **Normalization:** GroupNorm for stable training with small batch sizes.
+The GIF below demonstrates the "steering" capability of the models. 
 
-### 2. Base U-Net
-A standard encoder-decoder structure. While capable of learning the general density, it often fails to capture the high-frequency details of the MNIST distribution, leading to the artifacts seen in the visualization above.
+![Conditional Evolution](architecture_comparison_cond.gif)
+
+### Grid Configuration:
+* **Columns (1 → 5):** Each column represents a different digit condition, but **all start from the same initial noise**.
+* **Rows:** Top row shows the **Base UNet**; Bottom row shows the **Residual UNet**.
+* **Overlays:** Quiver plots visualize the gradient of the predicted velocity map, showing how the "push" changes based on the target digit.
 
 ---
 
-## 🛠️ Usage
+## 📊 Observations & Insights
 
-### Installation
-```bash
-pip install torch torchvision mlflow matplotlib numpy
+### 1. The "Semantic Lift"
+One of the most interesting findings was the effect of conditioning on the **Base UNet**. While the base model still produces more artifacts than the Residual version, the introduction of labels significantly improves its performance. Semantic guidance helps even a weaker backbone form recognizable structures.
+
+### 2. Stability vs. Guidance
+The **Residual UNet** remains the superior architecture, producing realistic and stable digits. However, the experiment proves that conditioning doesn't just steer the generation, it reshapes the entire transport dynamics. The geometry of the learned flow becomes label-aware, making the ODE integration more efficient.
+
+---
+
+## 🔜 Next Steps
+
+* **Architectural Refinement:** Implementation of Multi-Head Self-Attention blocks to capture global dependencies.
+* **Dataset Transition:** Moving toward the **NYU-Depth V2** dataset to explore **Image-to-Image conditioning**, where the model must reconstruct depth fields from RGB inputs.
