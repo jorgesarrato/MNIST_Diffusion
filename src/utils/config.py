@@ -16,13 +16,16 @@ class Config:
             "data_dir": DATA_DIR,
             "batch_size": 256,
             "num_workers": 1,
-            "val_split": 0.1
-             }
+            "val_split": 0.1,
+            "side_pixels": 128
+        }
     model_config = {
             "type": "UNet_FM",
             "filters_arr": [256, 512, 1024],
+            "encoder_filters_arr": [256, 512, 1024],
+            "encoder_denses_arr": [512, 256, 128],
             "t_emb_size": 512,
-            "label_emb_size": 256,
+            "label_emb_size": 512,
             "attn": False
         }
     training_config = {

@@ -2,6 +2,9 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
 import mlflow
+import torch
+
+# MNIST Visualization
 
 def visualize_flow_step(snapshot, downsample_factor=4, axes=None):
     if axes is None:
@@ -43,17 +46,18 @@ def visualize_flow_step(snapshot, downsample_factor=4, axes=None):
 
 
 def create_flow_animation(snapshots, filename='flow_evolution.gif', timing_mode = 'linear', n_steps = -1):
-    if (n_steps <= 0) or (n_steps > len(snapshots)):
-        n_steps = len(snapshots)
+    total_snaps = len(snapshots)
+    if (n_steps <= 0) or (n_steps > total_snaps):
+        n_steps = total_snaps
 
     if timing_mode == 'linear':
-        snapshots = [snapshots[int(i*len(snapshots)/n_steps)] for i in range(n_steps)]
+        snapshots = [snapshots[int(i*total_snaps/n_steps)] for i in range(n_steps)]
     elif timing_mode == 'quadratic':
-        snapshots = [snapshots[int(i**2*len(snapshots)/n_steps**2)] for i in range(n_steps)]
+        snapshots = [snapshots[int(i**2*total_snaps/n_steps**2)] for i in range(n_steps)]
     elif timing_mode == 'inv_quadratic':
-        snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (len(snapshots) - 1))] for i in range(n_steps)]
+        snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (total_snaps - 1))] for i in range(n_steps)]
     elif timing_mode == 'logarithmic':
-        indices = 1000 - np.logspace(0, np.log10(len(snapshots)), n_steps, dtype = int)
+        indices = 1000 - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
         snapshots = [snapshots[i] for i in reversed(indices)]
     else:
         raise ValueError(f"Timing mode {timing_mode} not supported.")
@@ -64,7 +68,7 @@ def create_flow_animation(snapshots, filename='flow_evolution.gif', timing_mode 
         ax.clear()
         visualize_flow_step(snapshots[i], axes=ax)
 
-    anim = FuncAnimation(fig, update, frames=len(snapshots), interval=100)
+    anim = FuncAnimation(fig, update, frames=total_snaps, interval=100)
     anim.save(filename, writer='pillow')
     plt.close()
     print(f"Saved animation to {filename}")
@@ -136,4 +140,102 @@ def create_multi_model_flow_animation(model_snapshots_dict, model_labels = None,
     plt.close()
     
     print(f"Grid animation saved to {filename}")
+    return filename
+
+# NYU-Depth Visualization
+
+def process_rgb_for_plot(img_tensor):
+    if isinstance(img_tensor, torch.Tensor):
+        img = img_tensor.detach().cpu()
+        if img.ndim == 4:
+            img = img.squeeze(0)
+        if img.shape[0] == 3:
+            img = img.permute(1, 2, 0)
+        img = img.numpy()
+    return img
+
+def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
+
+    if axes is None:
+        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    else:
+        ax = axes
+
+    depth_map = snapshot['image']
+    v_field = snapshot['v_field']
+    rgb_condition = snapshot.get('label')
+
+    ax[0].clear()
+    if rgb_condition is not None:
+        rgb_img = process_rgb_for_plot(rgb_condition)
+        ax[0].imshow(rgb_img)
+        ax[0].set_title("RGB Condition")
+    else:
+        ax[0].text(0.5, 0.5, "No Condition", ha='center')
+    ax[0].axis('off')
+
+    ax[1].clear()
+    ax[1].imshow(depth_map, cmap='inferno', origin='upper')
+
+    if v_field is not None:
+        
+        def block_mean(ar, fact):
+            h, w = ar.shape
+            h_crop = (h // fact) * fact
+            w_crop = (w // fact) * fact
+            ar_cropped = ar[:h_crop, :w_crop]
+            return ar_cropped.reshape(h_crop // fact, fact, w_crop // fact, fact).mean(axis=(1, 3))
+
+        v_field_small = block_mean(v_field, downsample_factor)
+
+        dy, dx = np.gradient(v_field_small)
+
+        h_s, w_s = v_field_small.shape
+        y = np.arange(h_s) * downsample_factor + downsample_factor / 2 - 0.5
+        x = np.arange(w_s) * downsample_factor + downsample_factor / 2 - 0.5
+        X, Y = np.meshgrid(x, y)
+
+        ax[1].quiver(X, Y, dx, -dy, 
+                  color='white', alpha=0.6, scale=None, width=0.005, pivot='mid')
+
+    ax[1].set_title(f'Depth Reconstruction (t = {snapshot["t"]:.2f})')
+    ax[1].axis('off')
+
+    return ax
+
+def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1):
+    total_snaps = len(snapshots)
+    if (n_steps <= 0) or (n_steps > total_snaps):
+        n_steps = total_snaps
+
+    if timing_mode == 'linear':
+        snapshots = [snapshots[int(i*total_snaps/n_steps)] for i in range(n_steps)]
+    elif timing_mode == 'quadratic':
+        snapshots = [snapshots[int(i**2*total_snaps/n_steps**2)] for i in range(n_steps)]
+    elif timing_mode == 'inv_quadratic':
+        snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (total_snaps - 1))] for i in range(n_steps)]
+    elif timing_mode == 'logarithmic':
+        indices = 1000 - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
+        snapshots = [snapshots[i] for i in reversed(indices)]
+    else:
+        raise ValueError(f"Timing mode {timing_mode} not supported.")
+    
+    indices = [min(i, total_snaps - 1) for i in indices]
+    selected_snapshots = [snapshots[i] for i in indices]
+
+    fig, ax = plt.subplots(1, 2, figsize=(10, 5), dpi=100)
+    plt.tight_layout()
+    
+    def update(i):
+        visualize_depth_evolution_step(selected_snapshots[i], axes=ax)
+
+    anim = FuncAnimation(fig, update, frames=len(selected_snapshots), interval=100)
+    anim.save(filename, writer='pillow')
+    plt.close()
+    
+    print(f"Saved animation to {filename}")
+    
+    if mlflow.active_run():
+        mlflow.log_artifact(filename)
+
     return filename
