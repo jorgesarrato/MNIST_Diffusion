@@ -6,11 +6,11 @@ from torch.utils.data import DataLoader
 import mlflow
 
 from utils.config import Config
-from utils.readers import load_mnist_images, load_mnist_labels
+from utils.readers import load_mnist_images, load_mnist_labels, load_nyu_labeled_subset
 from utils.model_parser import get_model
 from utils.opt_parser import get_optimizer
-from utils.datasets import mnist_dataset
-from utils.visualize import create_flow_animation
+from utils.datasets import mnist_dataset, nyu_depth_dataset
+from utils.visualize import create_flow_animation, create_depth_flow_animation
 from train_FM import train, evaluate
 from evolve import save_flow_evolution
 
@@ -21,16 +21,14 @@ def run():
     if device == 'cuda':
         torch.cuda.manual_seed_all(Config.RANDOM_SEED)
 
-    x_train = load_mnist_images(os.path.join(Config.DATA_DIR, 'train-images-idx3-ubyte'))
-    y_train = load_mnist_labels(os.path.join(Config.DATA_DIR,'train-labels-idx1-ubyte'))
-    x_test = load_mnist_images(os.path.join(Config.DATA_DIR, 't10k-images-idx3-ubyte'))
-    y_test = load_mnist_labels(os.path.join(Config.DATA_DIR, 't10k-labels-idx1-ubyte'))
+    x, y = load_nyu_labeled_subset(os.path.join(Config.NYU_DATA_DIR, 'nyu_depth_v2_labeled.mat'))
 
+    x_train, x_test, y_train, y_test = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
-    train_dataset = mnist_dataset(x_train, y_train)
-    val_dataset = mnist_dataset(x_val, y_val)
-    test_dataset = mnist_dataset(x_test, y_test)
+    train_dataset = nyu_depth_dataset(x_train, y_train, train = True, side_pixels=Config.data_config['side_pixels'])
+    val_dataset = nyu_depth_dataset(x_val, y_val, train = False, side_pixels=Config.data_config['side_pixels'])
+    test_dataset = nyu_depth_dataset(x_test, y_test, train = False, side_pixels=Config.data_config['side_pixels'])
 
     train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True, num_workers=Config.data_config['num_workers'])
     val_loader = DataLoader(val_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'])
@@ -52,7 +50,7 @@ def run():
         mlflow.log_params(Config.model_config)
         mlflow.log_params(Config.training_config)
         
-        mlflow.set_tag("problem", "diffusion_mnist")
+        mlflow.set_tag("problem", "diffusion_nyu")
 
         train(
             model=model,
@@ -71,15 +69,16 @@ def run():
         torch.save(model.state_dict(), "model_final.pth")
         mlflow.log_artifact("model_final.pth")
         
-        x_base = torch.randn(1, 1, 28, 28).to(device)
+        x_base = torch.randn(1, 1, 128, 128).to(device)
 
-        labels = [1,2,3,4,5]
+        labels = test_dataset.images[:5]
 
         for ii in range(5):
             snapshots = save_flow_evolution(model, x=x_base, label=labels[ii], device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_{ii}.pt")
             mlflow.log_artifact(f"snapshots_{ii}.pt")
-            create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
+            create_depth_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
+            #create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
 if __name__ == "__main__":
     run()

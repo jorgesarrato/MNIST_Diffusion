@@ -1,14 +1,23 @@
 import torch
 
-def save_flow_evolution(model, x = None, label = None, device = 'cpu', num_steps=50):
+def save_flow_evolution(model, x=None, label=None, device='cpu', num_steps=50, side_pixels=128):
+    model.eval()
+    
     if x is None:
-        x = torch.randn(1, 1, 28, 28).to(device)
+        x = torch.randn(1, 1, side_pixels, side_pixels).to(device)
     else:
         x = x.to(device)
 
-    dt = 1 / num_steps
+    label_tensor = None
+    if label is not None:
+        if torch.is_tensor(label):
+            label_tensor = label.to(device, dtype=torch.float32)
+            if label_tensor.ndim == 3:
+                label_tensor = label_tensor.unsqueeze(0)
+        else:
+            label_tensor = torch.tensor([label], device=device, dtype=torch.long)
 
-    model.eval()
+    dt = 1 / num_steps
     snapshots = []
 
     with torch.no_grad():
@@ -17,23 +26,23 @@ def save_flow_evolution(model, x = None, label = None, device = 'cpu', num_steps
             t_val = i / num_steps
 
             snapshot['image'] = x.cpu().squeeze()
+            snapshot['t'] = t_val
+            
+            snapshot['label'] = label 
 
             if i < num_steps:
-                t_tensor = torch.tensor([t_val], device=device)
+                t_tensor = torch.tensor([t_val], device=device).float()
 
-                if label is not None:
-                    label_tensor = torch.tensor([label], device=device, dtype=torch.int32)
+                if label_tensor is not None:
                     v = model(x, t_tensor, label_tensor)
                 else:
                     v = model(x, t_tensor)
-                    
+                
                 x = x + v * dt
                 snapshot['v_field'] = v.cpu().squeeze()
             else:
                 snapshot['v_field'] = None
 
-            snapshot['t'] = t_val
             snapshots.append(snapshot)
 
     return snapshots
-

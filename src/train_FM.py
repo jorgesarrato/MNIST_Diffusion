@@ -3,8 +3,8 @@ import torch.nn as nn
 import mlflow
 
 def nyu_depth_tensorize(x, y):
-    x = torch.tensor(x, dtype=torch.float32)/255
-    y = torch.tensor(y, dtype=torch.float32)/10
+    x = x.float()/255
+    y = y.float()/10
     return x, y
 
 
