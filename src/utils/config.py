@@ -9,7 +9,7 @@ class Config:
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM"
-    run_name = "Residuals+Attention"
+    run_name = "Base+Attention_zeroinit"
 
     data_config = {
             "data_dir": DATA_DIR,
@@ -24,14 +24,14 @@ class Config:
         }
     """
     model_config = {
-            "type": "UNet_FM_Residuals",
+            "type": "UNet_FM",
             "filters_arr": [256, 512, 1024],
             "t_emb_size": 512,
             "attn": True
         }
     training_config = {
             "lr": 1e-4,
-            "epochs": 50,
+            "epochs": 100,
             "optimizer": "AdamW",
             "wight_decay": 0.01,
             "scheduler_factor": 0.5,
