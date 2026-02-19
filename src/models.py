@@ -11,6 +11,9 @@ class ResidualAttentionBlock(nn.Module):
         self.v = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
         self.final = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
 
+        nn.init.zeros_(self.final.weight)
+        nn.init.zeros_(self.final.bias)
+
         self.act_softmax = nn.Softmax(dim=-1)
 
 
