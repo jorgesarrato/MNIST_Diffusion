@@ -1,5 +1,6 @@
 import torch
 from torchvision.transforms import v2
+import numpy as np
 
 class mnist_dataset(torch.utils.data.Dataset):
     def __init__(self, x, y):
@@ -34,9 +35,10 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img = torch.from_numpy(self.images[idx])
-        depth = torch.from_numpy(self.depths[idx].expand_dims(1))
+        depth = torch.from_numpy(np.expand_dims(self.depths[idx],0))
         
-        img, depth = self.transform(img, depth)
+        img = self.transform(img)
+        depth = self.transform(depth)
         
-        return img, depth
+        return depth, img
         

@@ -15,7 +15,7 @@ def save_flow_evolution(model, x=None, label=None, device='cpu', num_steps=50, s
             if label_tensor.ndim == 3:
                 label_tensor = label_tensor.unsqueeze(0)
         else:
-            label_tensor = torch.tensor([label], device=device, dtype=torch.long)
+            label_tensor = torch.tensor([label], device=device, dtype=torch.float32)
 
     dt = 1 / num_steps
     snapshots = []

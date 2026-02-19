@@ -102,10 +102,11 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class UNet_FM(nn.Module):
-    def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr, t_emb_size, label_emb_size, side_pixels, in_channels=1, n_channels_group = 8, attn = False):
+    def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr, t_emb_size, label_emb_size, side_pixels,
+                 in_channels=1, in_channels_cond = 1, n_channels_group = 8, attn = False):
         super().__init__()
 
-        self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, in_channels=in_channels, n_channels_group=n_channels_group, side_pixels = side_pixels)
+        self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, in_channels=in_channels_cond, n_channels_group=n_channels_group, side_pixels = side_pixels)
 
         self.time_mlp = nn.Sequential(
             nn.Linear(1, t_emb_size),
@@ -149,7 +150,6 @@ class UNet_FM(nn.Module):
 
         combined_emb = torch.cat([t_emb, label_emb], dim=1)
 
-
         skips = []
 
         for i,down in enumerate(self.downs):
@@ -175,10 +175,11 @@ class UNet_FM(nn.Module):
         return self.last(x)
 
 class UNet_FM_Residuals(nn.Module):
-    def __init__(self, filters_arr, t_emb_size, label_emb_size, in_channels=1, n_channels_group=8, attn = False):
+    def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr, t_emb_size, label_emb_size, side_pixels,
+                 in_channels=1, in_channels_cond = 1, n_channels_group = 8, attn = False):
         super().__init__()
 
-        self.label_emb = nn.Embedding(10, label_emb_size)
+        self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, in_channels=in_channels_cond, n_channels_group=n_channels_group, side_pixels = side_pixels)
 
         self.time_mlp = nn.Sequential(
             nn.Linear(1, t_emb_size),
