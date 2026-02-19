@@ -22,7 +22,7 @@ def load_nyu_labeled_subset(filename, n_read = -1):
         if n_read < 0:
             n_read = len(img)
         
-        img = np.transpose(img, (0, 3, 2, 1))
+        img = np.transpose(img, (0, 1, 3, 2))
         
         depth = np.transpose(depth, (0, 2, 1))
         
@@ -37,4 +37,7 @@ if __name__ == '__main__':
     print(f"Loaded MNIST training set with shape {x_train.shape}")
 
     img, depth = load_nyu_labeled_subset(os.path.join(Config.NYU_DATA_DIR, 'nyu_depth_v2_labeled.mat'), n_read=10)
+
+    print(img.shape)
+    print(depth.shape)
     

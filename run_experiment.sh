@@ -6,7 +6,7 @@
 #SBATCH -o %j.out
 #SBATCH -e %j.err
 #SBATCH --gres gpu:1
-#SBATCH --mem 3G
+#SBATCH --mem 30G
 
 #SBATCH -D .
 #############################

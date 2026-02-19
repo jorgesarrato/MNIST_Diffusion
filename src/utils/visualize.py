@@ -57,7 +57,7 @@ def create_flow_animation(snapshots, filename='flow_evolution.gif', timing_mode 
     elif timing_mode == 'inv_quadratic':
         snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (total_snaps - 1))] for i in range(n_steps)]
     elif timing_mode == 'logarithmic':
-        indices = 1000 - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
+        indices = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
         snapshots = [snapshots[i] for i in reversed(indices)]
     else:
         raise ValueError(f"Timing mode {timing_mode} not supported.")
@@ -98,7 +98,7 @@ def create_multi_model_flow_animation(model_snapshots_dict, model_labels = None,
     elif timing_mode == 'inv_quadratic':
         indices = [int((i / (n_steps - 1))**0.5 * (total_available - 1)) for i in range(n_steps)]
     elif timing_mode == 'logarithmic':
-        indices = 1000 - np.logspace(0, np.log10(total_available), n_steps, dtype = int)
+        indices = total_available - np.logspace(0, np.log10(total_available), n_steps, dtype = int)
         indices = [i for i in reversed(indices)]
     else:
         raise ValueError(f"Timing mode {timing_mode} not supported.")
@@ -203,7 +203,7 @@ def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
 
     return ax
 
-def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1):
+def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1, downsample_factor=10):
     total_snaps = len(snapshots)
     if (n_steps <= 0) or (n_steps > total_snaps):
         n_steps = total_snaps
@@ -215,19 +215,20 @@ def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timin
     elif timing_mode == 'inv_quadratic':
         snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (total_snaps - 1))] for i in range(n_steps)]
     elif timing_mode == 'logarithmic':
-        indices = 1000 - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
-        snapshots = [snapshots[i] for i in reversed(indices)]
+        indices = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
+        selected_snapshots = [snapshots[i] for i in reversed(indices)]
     else:
         raise ValueError(f"Timing mode {timing_mode} not supported.")
     
-    indices = [min(i, total_snaps - 1) for i in indices]
-    selected_snapshots = [snapshots[i] for i in indices]
+    if timing_mode != 'logarithmic':
+        indices = [min(i, total_snaps - 1) for i in indices]
+        selected_snapshots = [snapshots[i] for i in indices]
 
     fig, ax = plt.subplots(1, 2, figsize=(10, 5), dpi=100)
     plt.tight_layout()
     
     def update(i):
-        visualize_depth_evolution_step(selected_snapshots[i], axes=ax)
+        visualize_depth_evolution_step(selected_snapshots[i], axes=ax, downsample_factor=downsample_factor)
 
     anim = FuncAnimation(fig, update, frames=len(selected_snapshots), interval=100)
     anim.save(filename, writer='pillow')

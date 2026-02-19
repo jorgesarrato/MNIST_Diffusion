@@ -23,7 +23,7 @@ def run():
 
     x, y = load_nyu_labeled_subset(os.path.join(Config.NYU_DATA_DIR, 'nyu_depth_v2_labeled.mat'))
 
-    x_train, x_test, y_train, y_test = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
+    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
     train_dataset = nyu_depth_dataset(x_train, y_train, train = True, side_pixels=Config.data_config['side_pixels'])
@@ -69,12 +69,10 @@ def run():
         torch.save(model.state_dict(), "model_final.pth")
         mlflow.log_artifact("model_final.pth")
         
-        x_base = torch.randn(1, 1, 128, 128).to(device)
-
-        labels = test_dataset.images[:5]
+        x_base = torch.randn(1, 1, Config.data_config['side_pixels'], Config.data_config['side_pixels']).to(device)
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=labels[ii], device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii], device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_{ii}.pt")
             mlflow.log_artifact(f"snapshots_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
