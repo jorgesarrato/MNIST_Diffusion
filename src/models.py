@@ -100,15 +100,12 @@ class ResidualAttentionBlock(nn.Module):
 
         return self.final(attn) + x
 
-
 class UNet_FM(nn.Module):
     def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr, t_emb_size, label_emb_size, side_pixels,
                  in_channels=1, in_channels_cond=1, n_channels_group=8, attn=False, use_residuals=False):
         super().__init__()
         
         self.use_residuals = use_residuals
-
-        # Shared Image Encoder
         self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, 
                                      in_channels=in_channels_cond, n_channels_group=n_channels_group, side_pixels=side_pixels)
 
@@ -120,7 +117,6 @@ class UNet_FM(nn.Module):
         
         emb_dim = t_emb_size + label_emb_size
 
-        # Downsampling path
         self.downs = nn.ModuleList()
         for i in range(len(filters_arr)):
             in_ch = in_channels if i == 0 else filters_arr[i-1]
@@ -131,11 +127,11 @@ class UNet_FM(nn.Module):
             if self.use_residuals:
                 layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group=n_channels_group)
             else:
-                layers['emb_proj'] = nn.Linear(emb_dim, out_ch)
+                layers['norm'] = nn.GroupNorm(n_channels_group, out_ch)
+                layers['ada_proj'] = nn.Linear(emb_dim, out_ch * 2)
                 
             self.downs.append(layers)
 
-        # Middle Section
         if self.use_residuals:
             self.mid_res = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group=n_channels_group)
         else:
@@ -143,7 +139,6 @@ class UNet_FM(nn.Module):
             
         self.mid_attn = ResidualAttentionBlock(filters_arr[-1], n_channels_group=n_channels_group) if attn else nn.Identity()
 
-        # Upsampling path
         self.ups = nn.ModuleList()
         for i in range(len(filters_arr)-1, 0, -1):
             in_ch = filters_arr[i]
@@ -157,13 +152,21 @@ class UNet_FM(nn.Module):
             if self.use_residuals:
                 layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group=n_channels_group)
             else:
-                layers['emb_proj'] = nn.Linear(emb_dim, out_ch)
+                layers['norm'] = nn.GroupNorm(n_channels_group, out_ch)
+                layers['ada_proj'] = nn.Linear(emb_dim, out_ch * 2)
                 
             self.ups.append(layers)
 
         self.act_gelu = nn.GELU()
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.last = nn.Conv2d(filters_arr[0], in_channels, kernel_size=3, padding=1)
+
+    def apply_adagn(self, x, emb, norm_layer, proj_layer):
+        x = norm_layer(x)
+
+        ada_params = proj_layer(emb)[:, :, None, None]
+        gamma, beta = torch.chunk(ada_params, 2, dim=1)
+        return x * (1 + gamma) + beta
 
     def forward(self, x, t, y):
         t_emb = self.time_mlp(t.view(-1, 1))
@@ -172,25 +175,22 @@ class UNet_FM(nn.Module):
 
         skips = []
 
-        # Down Pass
         for i, down in enumerate(self.downs):
             x = down['conv'](x)
             
             if self.use_residuals:
                 x = down['residual'](x, combined_emb)
             else:
-                # Standard addition projection
-                x = self.act_gelu(x + down['emb_proj'](combined_emb)[:, :, None, None])
+                x = self.apply_adagn(x, combined_emb, down['norm'], down['ada_proj'])
+                x = self.act_gelu(x)
                 
             if i < len(self.downs)-1:
                 skips.append(x)
                 x = self.pool(x)
 
-        # Middle
         x = self.mid_res(x, combined_emb) if self.use_residuals else self.mid_res(x)
         x = self.mid_attn(x)
 
-        # Up Pass
         for i, up in enumerate(self.ups):
             x = up['upsample'](x)
             skip = skips.pop()
@@ -204,6 +204,7 @@ class UNet_FM(nn.Module):
             if self.use_residuals:
                 x = up['residual'](x, combined_emb)
             else:
-                x = self.act_gelu(x + up['emb_proj'](combined_emb)[:, :, None, None])
+                x = self.apply_adagn(x, combined_emb, up['norm'], up['ada_proj'])
+                x = self.act_gelu(x)
 
         return self.last(x)

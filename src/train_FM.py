@@ -25,17 +25,8 @@ def evaluate(model, dataloader_val, device='cpu'):
     return total_loss_val/len(dataloader_val)
 
 
-def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', dataloader_val = None, overfit_one=False):
+def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', dataloader_val = None, overfit_x0=None):
     model.to(device)
-
-    if overfit_one:
-        for x, y in dataloader_train:
-            x = x.to(device)
-            y = y.to(device)
-
-            x0_single = torch.randn_like(x[0])*0.1
-            break
-
 
     for epoch in range(epochs):
         total_loss = 0
@@ -47,10 +38,10 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
 
             optimizer.zero_grad()
             
-            if not overfit_one:
+            if overfit_x0 is None:
                 x0 = torch.randn_like(x)
             else:
-                x0 = x0_single[None, :, :, :].repeat(x.shape[0], 1, 1, 1)
+                x0 = overfit_x0.repeat(x.shape[0], 1, 1, 1)
 
 
             t = torch.rand(size=(x.shape[0],), device=device)

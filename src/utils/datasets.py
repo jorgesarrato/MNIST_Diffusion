@@ -1,6 +1,7 @@
 import torch
 from torchvision.transforms import v2
 import numpy as np
+import torch.nn.functional as F
 
 class mnist_dataset(torch.utils.data.Dataset):
     def __init__(self, x, y):
@@ -14,9 +15,6 @@ class mnist_dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return self.x[idx], self.y[idx]
-
-from torchvision.transforms import v2
-import torch.nn.functional as F
 
 class nyu_depth_dataset(torch.utils.data.Dataset):
     def __init__(self, x, y, train=True, side_pixels=128):
