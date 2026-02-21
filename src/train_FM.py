@@ -2,12 +2,6 @@ import torch
 import torch.nn as nn
 import mlflow
 
-def nyu_depth_tensorize(x, y):
-    x = x.float()/255
-    y = y.float()/10
-    return x, y
-
-
 def evaluate(model, dataloader_val, device='cpu'):
     model.eval()
 
@@ -16,8 +10,6 @@ def evaluate(model, dataloader_val, device='cpu'):
         for x, y in dataloader_val:
             x = x.to(device)
             y = y.to(device)
-
-            x, y = nyu_depth_tensorize(x, y)
 
             x0 = torch.randn_like(x)
             t = torch.rand(size=(x.shape[0],), device=device)
@@ -33,8 +25,17 @@ def evaluate(model, dataloader_val, device='cpu'):
     return total_loss_val/len(dataloader_val)
 
 
-def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', dataloader_val = None):
+def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', dataloader_val = None, overfit_one=False):
     model.to(device)
+
+    if overfit_one:
+        for x, y in dataloader_train:
+            x = x.to(device)
+            y = y.to(device)
+
+            x0_single = torch.randn_like(x[0])*0.1
+            break
+
 
     for epoch in range(epochs):
         total_loss = 0
@@ -44,13 +45,17 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
             x = x.to(device)
             y = y.to(device)
 
-            x,y = nyu_depth_tensorize(x, y)
-
             optimizer.zero_grad()
             
-            x0 = torch.randn_like(x)
+            if not overfit_one:
+                x0 = torch.randn_like(x)
+            else:
+                x0 = x0_single[None, :, :, :].repeat(x.shape[0], 1, 1, 1)
+
+
             t = torch.rand(size=(x.shape[0],), device=device)
             xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
+            xt.to(device)
             v = x-x0
 
             v_pred = model(xt, t, y).view_as(v)

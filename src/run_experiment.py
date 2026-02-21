@@ -27,6 +27,7 @@ def run():
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
     train_dataset = nyu_depth_dataset(x_train, y_train, train = True, side_pixels=Config.data_config['side_pixels'])
+    train_dataset_noaug = nyu_depth_dataset(x_train, y_train, train = False, side_pixels=Config.data_config['side_pixels'])
     val_dataset = nyu_depth_dataset(x_val, y_val, train = False, side_pixels=Config.data_config['side_pixels'])
     test_dataset = nyu_depth_dataset(x_test, y_test, train = False, side_pixels=Config.data_config['side_pixels'])
 
@@ -72,11 +73,17 @@ def run():
         x_base = torch.randn(1, 1, Config.data_config['side_pixels'], Config.data_config['side_pixels']).to(device)
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii], device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii][1], device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_{ii}.pt")
             mlflow.log_artifact(f"snapshots_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
             #create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
+
+        for ii in range(5):
+            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset_noaug[ii][1], device=device, num_steps=1000)
+            torch.save(snapshots, f"snapshots_train_{ii}.pt")
+            mlflow.log_artifact(f"snapshots_train_{ii}.pt")
+            create_depth_flow_animation(snapshots, filename = f"flow_evolution_train_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
 if __name__ == "__main__":
     run()
