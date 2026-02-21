@@ -2,7 +2,18 @@ import torch
 import torch.nn as nn
 import mlflow
 
-def evaluate(model, dataloader_val, device='cpu'):
+LOSS_MAP = {
+    "L1": nn.L1Loss(),
+    "MSE": nn.MSELoss()
+}
+
+
+def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1'):
+    if loss_fn_str not in LOSS_MAP.keys():
+        raise ValueError(f"Loss function {loss_fn_str} not supported.")
+
+    loss_fn = LOSS_MAP[loss_fn_str]
+
     model.eval()
 
     total_loss_val = 0
@@ -18,14 +29,19 @@ def evaluate(model, dataloader_val, device='cpu'):
 
             v_pred = model(xt, t, y).view_as(v)
 
-            loss = nn.MSELoss()(v, v_pred)
+            loss = loss_fn(v, v_pred)
 
             total_loss_val += loss.item()
 
     return total_loss_val/len(dataloader_val)
 
 
-def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', dataloader_val = None, overfit_x0=None):
+def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str = 'L1', dataloader_val = None, overfit_x0=None):
+    if loss_fn_str not in LOSS_MAP.keys():
+        raise ValueError(f"Loss function {loss_fn_str} not supported.")
+
+    loss_fn = LOSS_MAP[loss_fn_str]
+
     model.to(device)
 
     for epoch in range(epochs):
@@ -51,7 +67,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
 
             v_pred = model(xt, t, y).view_as(v)
 
-            loss = nn.MSELoss()(v, v_pred)
+            loss = loss_fn(v, v_pred)
 
             loss.backward()
             optimizer.step()
@@ -66,7 +82,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', d
             mlflow.log_metric("learning_rate", current_lr, step=epoch)
 
         if dataloader_val is not None:
-            avg_loss_val = evaluate(model, dataloader_val, device)
+            avg_loss_val = evaluate(model, dataloader_val, device, loss_fn_str)
 
             if mlflow.active_run():
                 mlflow.log_metric("val_loss", avg_loss_val, step=epoch)

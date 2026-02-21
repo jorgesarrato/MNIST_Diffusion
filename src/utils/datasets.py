@@ -30,11 +30,15 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
         img = torch.from_numpy(self.images[idx])
         depth = torch.from_numpy(self.depths[idx]).unsqueeze(0)/10
 
-        depth_min, depth_max = depth.min(), depth.max()
-        depth = (depth - depth_min) / (depth_max - depth_min) # to [0, 1]
+        mask = depth > 0.1
+        if mask.any():
+            d_min, d_max = depth[mask].min(), depth[mask].max()
+            depth = torch.clamp(depth, d_min, d_max)
+            depth = (depth - d_min) / (d_max - d_min + 1e-8) # to [0, 1]
+
         depth = (depth * 2.0) - 1.0 # to [-1, 1]
 
-        img = img / 255.0
+        img = ((img / 255.0) * 2) - 1.0 # to [-1, 1]
 
         if self.train:
             stacked = torch.cat([img, depth], dim=0)

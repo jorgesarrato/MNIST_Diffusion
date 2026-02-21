@@ -60,7 +60,8 @@ def run():
             scheduler=scheduler,
             dataloader_train=train_loader,
             dataloader_val=val_loader,
-            device=device
+            device=device,
+            loss_fn_str=Config.training_config['loss']
         )
 
         test_loss = evaluate(model, test_loader, device)
