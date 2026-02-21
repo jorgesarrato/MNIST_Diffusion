@@ -28,11 +28,10 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img = torch.from_numpy(self.images[idx])
-        depth = torch.from_numpy(self.depths[idx]).unsqueeze(0)
+        depth = torch.from_numpy(self.depths[idx]).unsqueeze(0)/10
 
         depth_min, depth_max = depth.min(), depth.max()
-        if depth_max - depth_min > 0:
-            depth = (depth - depth_min) / (depth_max - depth_min) # to [0, 1]
+        depth = (depth - depth_min) / (depth_max - depth_min) # to [0, 1]
         depth = (depth * 2.0) - 1.0 # to [-1, 1]
 
         img = img / 255.0

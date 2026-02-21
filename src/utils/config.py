@@ -20,7 +20,7 @@ class Config:
             "side_pixels": 128
         }
     model_config = {
-            "type": "UNet_FM_Residuals",
+            "type": "UNet_FM",
             "filters_arr": [256, 512, 1024],
             "encoder_filters_arr": [128, 256, 512, 1024],
             "encoder_denses_arr": [512, 256, 128],
@@ -30,7 +30,8 @@ class Config:
             "in_channels": 1,
             "in_channels_cond": 3,
             "n_channels_group": 8,
-            "attn": False
+            "attn": False,
+            "use_residuals": True
         }
     training_config = {
             "lr": 1e-4,

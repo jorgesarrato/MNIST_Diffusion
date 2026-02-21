@@ -24,7 +24,7 @@ dataloader = DataLoader(dataset, batch_size=1)
 
 model = UNet_FM([64, 128, 256], [64, 128, 256], [64, 128, 256], 256, 256, 128, in_channels=1, in_channels_cond=3, use_residuals = True)
 optimizer = optim.Adam(model.parameters(), lr=0.0003)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor = 0.5, patience = 100, threshold = 0.001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor = 0.5, patience = 250, threshold = 0.001)
 
 import time
 t1 = time.time()
