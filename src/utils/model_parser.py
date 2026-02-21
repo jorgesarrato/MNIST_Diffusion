@@ -1,9 +1,8 @@
-from models import UNet_FM_Residuals, UNet_FM
+from models import UNet_FM
 
 
 MODEL_MAP = {
     "UNet_FM": UNet_FM,
-    "UNet_FM_Residuals": UNet_FM_Residuals
 }
 
 def get_model(model_config):
