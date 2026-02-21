@@ -7,24 +7,32 @@ class ResidualBlock(nn.Module):
     def __init__(self, ch, emb_dim, n_channels_group=8):
         super().__init__()
         self.gn1 = nn.GroupNorm(n_channels_group, ch)
-        self.conv1 = nn.Conv2d(ch, ch, kernel_size = 3, stride = 1, padding = 1)
+        self.conv1 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1)
 
         if emb_dim > 0:
-            self.t_proj = nn.Linear(emb_dim, ch)
+            self.t_proj = nn.Linear(emb_dim, ch * 2)
 
         self.gn2 = nn.GroupNorm(n_channels_group, ch)
-        self.conv2 = nn.Conv2d(ch, ch, kernel_size = 3, stride = 1, padding = 1)
+        self.conv2 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1)
         
         self.act_gelu = nn.GELU()
 
+        nn.init.zeros_(self.conv2.weight)
+        nn.init.zeros_(self.conv2.bias)
+
     def forward(self, x, emb=None):
         x_in = x
-        x = self.conv1(self.act_gelu(self.gn1(x_in)))
+        
+        x = self.conv1(self.act_gelu(self.gn1(x)))
 
         if emb is not None:
-            x = x + self.t_proj(emb)[:, :, None, None] 
+            emb_out = self.t_proj(self.act_gelu(emb))[:, :, None, None]
+            gamma, beta = torch.chunk(emb_out, 2, dim=1)
+            
+            x = x * (1 + gamma) + beta
         
         x = self.conv2(self.act_gelu(self.gn2(x)))
+        
         return x + x_in
     
 class Image_Encoder(nn.Module):
@@ -80,6 +88,9 @@ class ResidualAttentionBlock(nn.Module):
         self.v = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
         self.final = nn.Conv2d(ch, ch, kernel_size = 1, stride = 1, padding = 0)
 
+        nn.init.zeros_(self.final.weight)
+        nn.init.zeros_(self.final.bias)
+
         self.act_softmax = nn.Softmax(dim=-1)
 
 
@@ -102,12 +113,23 @@ class ResidualAttentionBlock(nn.Module):
 
 class UNet_FM(nn.Module):
     def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr, t_emb_size, label_emb_size, side_pixels,
-                 in_channels=1, in_channels_cond=1, n_channels_group=8, attn=False, use_residuals=False):
+                 in_channels=1, in_channels_cond=3, n_channels_group=8, attn=False, 
+                 use_residuals=False, cond_type="concat"):
         super().__init__()
         
         self.use_residuals = use_residuals
+        self.cond_type = cond_type
+        
         self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, 
-                                     in_channels=in_channels_cond, n_channels_group=n_channels_group, side_pixels=side_pixels)
+                                        in_channels=in_channels_cond, n_channels_group=n_channels_group, side_pixels=side_pixels)
+        emb_dim = t_emb_size + label_emb_size
+
+        if self.cond_type == "encoder":
+            input_dim = in_channels
+        elif self.cond_type == "concat":
+            input_dim = in_channels + in_channels_cond
+        else:
+            raise ValueError(f"Conditioning type '{cond_type}' not supported, available types are 'encoder' and 'concat'.")
 
         self.time_mlp = nn.Sequential(
             nn.Linear(1, t_emb_size),
@@ -115,11 +137,9 @@ class UNet_FM(nn.Module):
             nn.Linear(t_emb_size, t_emb_size)
         )
         
-        emb_dim = t_emb_size + label_emb_size
-
         self.downs = nn.ModuleList()
         for i in range(len(filters_arr)):
-            in_ch = in_channels if i == 0 else filters_arr[i-1]
+            in_ch = input_dim if i == 0 else filters_arr[i-1]
             out_ch = filters_arr[i]
             
             layers = nn.ModuleDict({'conv': nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)})
@@ -161,23 +181,28 @@ class UNet_FM(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.last = nn.Conv2d(filters_arr[0], in_channels, kernel_size=3, padding=1)
 
+        nn.init.zeros_(self.last.weight)
+        nn.init.zeros_(self.last.bias)
+
     def apply_adagn(self, x, emb, norm_layer, proj_layer):
         x = norm_layer(x)
-
         ada_params = proj_layer(emb)[:, :, None, None]
         gamma, beta = torch.chunk(ada_params, 2, dim=1)
         return x * (1 + gamma) + beta
 
     def forward(self, x, t, y):
         t_emb = self.time_mlp(t.view(-1, 1))
+
         label_emb = self.label_emb(y)
         combined_emb = torch.cat([t_emb, label_emb], dim=1)
+
+        if self.cond_type == "concat":
+            x = torch.cat([x, y], dim=1)
 
         skips = []
 
         for i, down in enumerate(self.downs):
             x = down['conv'](x)
-            
             if self.use_residuals:
                 x = down['residual'](x, combined_emb)
             else:
