@@ -10,13 +10,13 @@ class Config:
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM_conditioned"
-    run_name = "Residuals-Concat+Encoder-Res+adaGN"
+    run_name = "Residuals-Concat+EncoderResNet-Res+adaGN+attn"
 
     data_config = {
             "data_dir": DATA_DIR,
             "batch_size": 16,
             "num_workers": 1,
-            "val_split": 0.01,
+            "val_split": 0.1,
             "side_pixels": 128
         }
     model_config = {
@@ -30,9 +30,11 @@ class Config:
             "in_channels": 1,
             "in_channels_cond": 3,
             "n_channels_group": 8,
-            "attn": False,
+            "attn": True,
+            "cross_attn": True,
             "use_residuals": True,
-            "cond_type": "concat"
+            "cond_type": "concat",
+            "encoder_type": "resnet"
         }
     training_config = {
             "lr": 1e-4,
@@ -41,6 +43,8 @@ class Config:
             "wight_decay": 0.01,
             "scheduler_factor": 0.5,
             "patience": 5,
-            "loss": "L1"
-        }
+            "loss": "L1_Grad",
+            "weight_type": "quad",
+            "backbone_lr_ratio": 0.1
+            }
 

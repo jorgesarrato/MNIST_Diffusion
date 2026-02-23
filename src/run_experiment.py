@@ -61,7 +61,8 @@ def run():
             dataloader_train=train_loader,
             dataloader_val=val_loader,
             device=device,
-            loss_fn_str=Config.training_config['loss']
+            loss_fn_str=Config.training_config['loss'],
+            weight_type=Config.training_config['weight_type']
         )
 
         test_loss = evaluate(model, test_loader, device)
