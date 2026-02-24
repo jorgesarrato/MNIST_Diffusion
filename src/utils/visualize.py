@@ -168,6 +168,8 @@ def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
     ax[0].clear()
     if rgb_condition is not None:
         rgb_img = process_rgb_for_plot(rgb_condition)
+
+        rgb_img = (rgb_img + 1)/2
         ax[0].imshow(rgb_img)
         ax[0].set_title("RGB Condition")
     else:
@@ -175,6 +177,7 @@ def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
     ax[0].axis('off')
 
     ax[1].clear()
+    depth_map = (depth_map + 1)/2
     ax[1].imshow(depth_map, cmap='inferno', origin='upper')
 
     if v_field is not None:

@@ -10,7 +10,7 @@ class Config:
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM_conditioned"
-    run_name = "Residuals-Concat+EncoderResNet-Res+adaGN+attn"
+    run_name = "SelfLabel"
 
     data_config = {
             "data_dir": DATA_DIR,
@@ -40,7 +40,7 @@ class Config:
             "lr": 1e-4,
             "epochs": 100,
             "optimizer": "AdamW",
-            "wight_decay": 0.01,
+            "weight_decay": 0.01,
             "scheduler_factor": 0.5,
             "patience": 5,
             "loss": "L1_Grad",

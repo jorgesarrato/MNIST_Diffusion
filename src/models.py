@@ -5,21 +5,47 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
+import torch
+import torch.nn as nn
+from torchvision import models
+
 class ResNet_Encoder(nn.Module):
-    def __init__(self, target_spatial_ch, label_emb_size, denses_arr=None, return_spatial=True):
+    def __init__(self, target_spatial_ch, label_emb_size, num_unet_downs, denses_arr=None, return_spatial=True):
         super().__init__()
         self.return_spatial = return_spatial
         
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        children = list(resnet.children())
         
-        self.backbone = nn.Sequential(*list(resnet.children())[:-2])
-
-        self.spatial_proj = nn.Conv2d(512, target_spatial_ch, kernel_size=1)
+        # Match ResNet downsampling to UNet downsampling
+        # UNet downs = 2 -> 1/4 resolution -> ResNet layer1 (idx 5, 64 ch)
+        # UNet downs = 3 -> 1/8 resolution -> ResNet layer2 (idx 6, 128 ch)
+        # UNet downs = 4 -> 1/16 resolution -> ResNet layer3 (idx 7, 256 ch)
+        # UNet downs >= 5 -> 1/32 resolution -> ResNet layer4 (idx 8, 512 ch)
+        
+        if num_unet_downs <= 2:
+            cut_idx = 5
+            resnet_ch = 64
+        elif num_unet_downs == 3:
+            cut_idx = 6
+            resnet_ch = 128
+        elif num_unet_downs == 4:
+            cut_idx = 7
+            resnet_ch = 256
+        else:
+            cut_idx = 8
+            resnet_ch = 512
+            
+        self.backbone = nn.Sequential(*children[:cut_idx])
+        
+        self.spatial_proj = nn.Conv2d(resnet_ch, target_spatial_ch, kernel_size=1)
+        self.norm = nn.GroupNorm(8, target_spatial_ch)
         
         if not return_spatial:
+            self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
             self.flatten = nn.Flatten()
             self.fc = nn.Sequential(
-                nn.Linear(target_spatial_ch * 4 * 4, denses_arr[-1] if denses_arr else 512),
+                nn.Linear(target_spatial_ch * 16, denses_arr[-1] if denses_arr else 512),
                 nn.GELU(),
                 nn.Linear(denses_arr[-1] if denses_arr else 512, label_emb_size)
             )
@@ -27,10 +53,12 @@ class ResNet_Encoder(nn.Module):
     def forward(self, x):
         feat = self.backbone(x)
         feat = self.spatial_proj(feat)
+        feat = self.norm(feat)
         
         if self.return_spatial:
             return feat
-        
+            
+        feat = self.adaptive_pool(feat)
         return self.fc(self.flatten(feat))
 
 class ResidualBlock(nn.Module):
@@ -178,15 +206,23 @@ class UNet_FM(nn.Module):
         self.use_cross = cross_attn
 
         if encoder_type == "resnet":
-            self.label_emb = ResNet_Encoder(encoder_filters_arr[-1], label_emb_size, denses_arr=encoder_denses_arr, return_spatial=cross_attn)
+            self.label_emb = ResNet_Encoder(encoder_filters_arr[-1], label_emb_size, denses_arr=encoder_denses_arr, return_spatial=cross_attn, num_unet_downs=len(filters_arr))
         elif encoder_type == "simple":
             self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, 
                                             in_channels=in_channels_cond, n_channels_group=n_channels_group, 
                                             side_pixels=side_pixels, return_spatial=cross_attn)
         else:
             raise ValueError(f"Encoder type {encoder_type} not supported.")
+
+        if cross_attn:
+            self.global_proj = nn.Sequential(
+                nn.Linear(encoder_filters_arr[-1], label_emb_size),
+                nn.GELU()
+            )
+        else:
+            self.global_proj = nn.Identity()
         
-        emb_dim = t_emb_size if cross_attn else (t_emb_size + label_emb_size)
+        emb_dim = t_emb_size + label_emb_size # Pass label emb during cross-attn too
 
         input_dim = (in_channels + in_channels_cond) if self.cond_type == "concat" else in_channels
 
@@ -231,10 +267,16 @@ class UNet_FM(nn.Module):
         t_emb = self.time_mlp(t.view(-1, 1))
         y_feat = self.label_emb(y)
         
-        combined_emb = t_emb if self.use_cross else torch.cat([t_emb, y_feat], dim=1)
+        if self.use_cross:
+            y_global = y_feat.mean(dim=[2, 3]) # Flatten via mean
+            y_global = self.global_proj(y_global) # Project to label_emb_size
+        else:
+            y_global = y_feat
 
         if self.cond_type == "concat":
             x = torch.cat([x, y], dim=1)
+
+        combined_emb = torch.cat([t_emb, y_global], dim=1)
 
         skips = []
         for i, down in enumerate(self.downs):
@@ -246,8 +288,6 @@ class UNet_FM(nn.Module):
         x = self.mid_res(x, combined_emb)
         
         if self.use_cross:
-            if x.shape[2:] != y_feat.shape[2:]:
-                y_feat = F.interpolate(y_feat, size=x.shape[2:], mode='bilinear', align_corners=False)
             x = self.mid_attn(x, y_feat)
         else:
             x = self.mid_attn(x)
