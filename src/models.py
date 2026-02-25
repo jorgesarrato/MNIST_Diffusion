@@ -77,8 +77,8 @@ class ResidualBlock(nn.Module):
 
         if emb_dim > 0:
             self.t_proj = nn.Linear(emb_dim, ch * 2)
-            nn.init.zeros_(self.ada_proj.weight)
-            nn.init.zeros_(self.ada_proj.bias)
+            nn.init.zeros_(self.t_proj.weight)
+            nn.init.zeros_(self.t_proj.bias)
 
         self.gn2 = nn.GroupNorm(n_channels_group, ch)
         self.conv2 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1)
@@ -261,13 +261,23 @@ class UNet_FM(nn.Module):
 
         self.ups = nn.ModuleList()
         for i in range(len(filters_arr)-1, 0, -1):
+            out_ch = filters_arr[i-1]
+            in_ch = filters_arr[i]
+            
             layers = nn.ModuleDict({
-                'upsample': nn.ConvTranspose2d(filters_arr[i], filters_arr[i-1], kernel_size=2, stride=2),
-                'convskip': nn.Conv2d(filters_arr[i-1]*2, filters_arr[i-1], kernel_size=3, padding=1)
+                'upsample': nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2),
+                'convskip': nn.Conv2d(out_ch*2, out_ch, kernel_size=3, padding=1)
             })
-            layers['residual'] = ResidualBlock(filters_arr[i-1], emb_dim, n_channels_group=n_channels_group) if use_residuals else \
-                                 nn.ModuleDict({'norm': nn.GroupNorm(n_channels_group, filters_arr[i-1]), 'ada_proj': nn.Linear(emb_dim, filters_arr[i-1] * 2)})
+            layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group=n_channels_group) if use_residuals else \
+                                 nn.ModuleDict({'norm': nn.GroupNorm(n_channels_group, out_ch), 'ada_proj': nn.Linear(emb_dim, out_ch * 2)})
+            if cross_attn:
+                layers['cross_attn'] = ResidualCrossAttentionBlock(
+                    out_ch, 
+                    encoder_filters_arr[-1],
+                    n_channels_group
+                )
             self.ups.append(layers)
+
 
         self.act_gelu = nn.GELU()
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -314,6 +324,10 @@ class UNet_FM(nn.Module):
             skip = skips.pop()
             if x.shape != skip.shape: x = F.interpolate(x, size=skip.shape[2:], mode='bilinear')
             x = up['convskip'](torch.cat([x, skip], dim=1))
+
+            if self.use_cross:
+                x = up['cross_attn'](x, y_feat)
+
             x = up['residual'](x, combined_emb) if self.use_residuals else self.act_gelu(self.apply_adagn(x, combined_emb, up['norm'], up['ada_proj']))
 
         return self.last(x)
