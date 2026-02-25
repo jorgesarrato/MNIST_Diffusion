@@ -10,11 +10,19 @@ import torch.nn as nn
 from torchvision import models
 
 class ResNet_Encoder(nn.Module):
-    def __init__(self, target_spatial_ch, label_emb_size, num_unet_downs, denses_arr=None, return_spatial=True):
+    def __init__(self, target_spatial_ch, label_emb_size, num_unet_downs, condition_ch = 3, denses_arr=None, return_spatial=True):
         super().__init__()
         self.return_spatial = return_spatial
         
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+
+        if condition_ch == 1:
+            resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            with torch.no_grad():
+                resnet.conv1.weight[:] = resnet.conv1.weight.mean(dim=1, keepdim=True)
+
+
         children = list(resnet.children())
         
         # Match ResNet downsampling to UNet downsampling
@@ -69,6 +77,8 @@ class ResidualBlock(nn.Module):
 
         if emb_dim > 0:
             self.t_proj = nn.Linear(emb_dim, ch * 2)
+            nn.init.zeros_(self.ada_proj.weight)
+            nn.init.zeros_(self.ada_proj.bias)
 
         self.gn2 = nn.GroupNorm(n_channels_group, ch)
         self.conv2 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1)
@@ -77,6 +87,7 @@ class ResidualBlock(nn.Module):
 
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
+
 
     def forward(self, x, emb=None):
         x_in = x
@@ -206,7 +217,7 @@ class UNet_FM(nn.Module):
         self.use_cross = cross_attn
 
         if encoder_type == "resnet":
-            self.label_emb = ResNet_Encoder(encoder_filters_arr[-1], label_emb_size, denses_arr=encoder_denses_arr, return_spatial=cross_attn, num_unet_downs=len(filters_arr))
+            self.label_emb = ResNet_Encoder(encoder_filters_arr[-1], label_emb_size, denses_arr=encoder_denses_arr, condition_ch=in_channels_cond, return_spatial=cross_attn, num_unet_downs=len(filters_arr))
         elif encoder_type == "simple":
             self.label_emb = Image_Encoder(encoder_filters_arr, encoder_denses_arr, label_emb_size, 
                                             in_channels=in_channels_cond, n_channels_group=n_channels_group, 
@@ -262,6 +273,12 @@ class UNet_FM(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.last = nn.Conv2d(filters_arr[0], in_channels, kernel_size=3, padding=1)
         nn.init.zeros_(self.last.weight); nn.init.zeros_(self.last.bias)
+
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                if m.out_features in [f * 2 for f in filters_arr]:
+                    nn.init.zeros_(m.weight)
+                    nn.init.zeros_(m.bias)
 
     def forward(self, x, t, y):
         t_emb = self.time_mlp(t.view(-1, 1))
