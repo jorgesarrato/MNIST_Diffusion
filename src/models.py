@@ -5,10 +5,6 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
-import torch
-import torch.nn as nn
-from torchvision import models
-
 class ResNet_Encoder(nn.Module):
     def __init__(self, target_spatial_ch, label_emb_size, num_unet_downs, condition_ch = 3, denses_arr=None, return_spatial=True):
         super().__init__()
@@ -18,7 +14,7 @@ class ResNet_Encoder(nn.Module):
 
 
         if condition_ch == 1:
-            resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False, padding_mode = 'reflect')
             with torch.no_grad():
                 resnet.conv1.weight[:] = resnet.conv1.weight.mean(dim=1, keepdim=True)
 
@@ -73,7 +69,7 @@ class ResidualBlock(nn.Module):
     def __init__(self, ch, emb_dim, n_channels_group=8):
         super().__init__()
         self.gn1 = nn.GroupNorm(n_channels_group, ch)
-        self.conv1 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, padding_mode = 'reflect')
 
         if emb_dim > 0:
             self.t_proj = nn.Linear(emb_dim, ch * 2)
@@ -81,7 +77,7 @@ class ResidualBlock(nn.Module):
             nn.init.zeros_(self.t_proj.bias)
 
         self.gn2 = nn.GroupNorm(n_channels_group, ch)
-        self.conv2 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, padding_mode = 'reflect')
         
         self.act_gelu = nn.GELU()
 
@@ -105,39 +101,41 @@ class ResidualBlock(nn.Module):
         return x + x_in
     
 class Image_Encoder(nn.Module):
-    def __init__(self, filters_arr, denses_arr, label_emb_size, in_channels=3, n_channels_group=8, side_pixels=128, return_spatial=False):
+    def __init__(self, filters_arr, denses_arr, label_emb_size, in_channels=3, 
+                 n_channels_group=8, side_pixels=128, return_spatial=False):
         super().__init__()
         self.return_spatial = return_spatial
         self.downs = nn.ModuleList()
+        
         for i in range(len(filters_arr)):
             in_ch = in_channels if i == 0 else filters_arr[i-1]
             out_ch = filters_arr[i]
+            
             self.downs.append(nn.ModuleDict({
-                'conv': nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding=1),
+                'conv': nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1, padding_mode = 'reflect'),
                 'residual': ResidualBlock(out_ch, 0, n_channels_group=n_channels_group)
             }))
             
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        
-        if not return_spatial:
+        self.act_gelu = nn.GELU()
+
+        if self.return_spatial:
+            self.final_norm = nn.GroupNorm(n_channels_group, filters_arr[-1])
+        else:
             resulting_side_pixels = side_pixels // (2 ** len(filters_arr))
             self.flatten = nn.Flatten()
             self.linears = nn.ModuleList()
             for i in range(len(denses_arr)):
-                in_dim = filters_arr[-1] * resulting_side_pixels**2 if i == 0 else denses_arr[i-1]
-                out_dim = denses_arr[i]
-                self.linears.append(nn.Linear(in_dim, out_dim))
-            self.act_gelu = nn.GELU()
+                in_dim = filters_arr[-1] * (resulting_side_pixels**2) if i == 0 else denses_arr[i-1]
+                self.linears.append(nn.Linear(in_dim, denses_arr[i]))
             self.last = nn.Linear(denses_arr[-1], label_emb_size)
 
     def forward(self, x):
         for down in self.downs:
             x = down['conv'](x)
             x = down['residual'](x)
-            x = self.pool(x)
         
         if self.return_spatial:
-            return x
+            return self.act_gelu(self.final_norm(x))
         
         x = self.flatten(x)
         for linear in self.linears:
@@ -178,10 +176,35 @@ class ResidualAttentionBlock(nn.Module):
 
         return self.final(attn) + x
     
+def get_2d_sincos_pos_embed(embed_dim, h, w, device):
+
+    assert embed_dim % 4 == 0, "Embedding dimension must be divisible by 4 for 2D sin-cos pos embedding"
+    half_dim = embed_dim // 2
+    
+    grid_h = torch.arange(h, dtype=torch.float32, device=device)
+    grid_w = torch.arange(w, dtype=torch.float32, device=device)
+    grid_h, grid_w = torch.meshgrid(grid_h, grid_w, indexing='ij')
+    
+    emb = torch.arange(half_dim // 2, dtype=torch.float32, device=device)
+    emb = 10000.0 ** (2.0 * emb / half_dim)
+    emb = 1.0 / emb
+    
+    emb_h = grid_h.flatten()[:, None] * emb[None, :] 
+    emb_w = grid_w.flatten()[:, None] * emb[None, :] 
+    
+    pos_h = torch.cat([torch.sin(emb_h), torch.cos(emb_h)], dim=1)
+    pos_w = torch.cat([torch.sin(emb_w), torch.cos(emb_w)], dim=1)
+    
+    pos = torch.cat([pos_h, pos_w], dim=1)
+    
+    return pos.view(h, w, embed_dim).permute(2, 0, 1).unsqueeze(0)
+
+
 class ResidualCrossAttentionBlock(nn.Module):
     def __init__(self, ch, context_ch, n_channels_group=8):
         super().__init__()
         self.gn = nn.GroupNorm(n_channels_group, ch)
+        
         self.q = nn.Conv2d(ch, ch, kernel_size=1)
         self.k = nn.Conv2d(context_ch, ch, kernel_size=1)
         self.v = nn.Conv2d(context_ch, ch, kernel_size=1)
@@ -192,10 +215,16 @@ class ResidualCrossAttentionBlock(nn.Module):
 
     def forward(self, x, context):
         b, c, h, w = x.shape
+        _, c_ctx, h_ctx, w_ctx = context.shape
+        
         x_gn = self.gn(x)
 
-        q = self.q(x_gn).view(b, c, -1)
-        k = self.k(context).view(b, c, -1)
+        pos_x = get_2d_sincos_pos_embed(c, h, w, x.device)
+        pos_context = get_2d_sincos_pos_embed(c_ctx, h_ctx, w_ctx, context.device)
+
+        q = self.q(x_gn + pos_x).view(b, c, -1)
+        k = self.k(context + pos_context).view(b, c, -1)
+        
         v = self.v(context).view(b, c, -1)
 
         attn = torch.bmm(q.transpose(1, 2), k) * (c**-0.5)
@@ -205,7 +234,7 @@ class ResidualCrossAttentionBlock(nn.Module):
         out = out.view(b, c, h, w)
 
         return self.final(out) + x
-
+    
 class UNet_FM(nn.Module):
     def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr, t_emb_size, label_emb_size, side_pixels,
                  in_channels=1, in_channels_cond=3, n_channels_group=8, attn=False, cross_attn=False,
@@ -233,7 +262,7 @@ class UNet_FM(nn.Module):
         else:
             self.global_proj = nn.Identity()
         
-        emb_dim = t_emb_size + label_emb_size # Pass label emb during cross-attn too
+        emb_dim = t_emb_size + label_emb_size
 
         input_dim = (in_channels + in_channels_cond) if self.cond_type == "concat" else in_channels
 
@@ -247,9 +276,17 @@ class UNet_FM(nn.Module):
         for i in range(len(filters_arr)):
             in_ch = input_dim if i == 0 else filters_arr[i-1]
             out_ch = filters_arr[i]
-            layers = nn.ModuleDict({'conv': nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)})
-            layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group=n_channels_group) if use_residuals else \
-                                 nn.ModuleDict({'norm': nn.GroupNorm(n_channels_group, out_ch), 'ada_proj': nn.Linear(emb_dim, out_ch * 2)})
+            layers = nn.ModuleDict({'conv': nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, padding_mode = 'reflect')})
+            
+            if use_residuals:
+                layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group=n_channels_group) 
+            else:
+                layers['norm'] = nn.GroupNorm(n_channels_group, out_ch)
+                layers['ada_proj'] = nn.Linear(emb_dim, out_ch * 2)
+
+            if i < len(filters_arr) - 1:
+                layers['downsample'] = nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1, padding_mode = 'reflect')
+
             self.downs.append(layers)
 
         self.mid_res = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group=n_channels_group) if use_residuals else nn.Identity()
@@ -266,7 +303,7 @@ class UNet_FM(nn.Module):
             
             layers = nn.ModuleDict({
                 'upsample': nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2),
-                'convskip': nn.Conv2d(out_ch*2, out_ch, kernel_size=3, padding=1)
+                'convskip': nn.Conv2d(out_ch*2, out_ch, kernel_size=3, padding=1, padding_mode = 'reflect')
             })
             layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group=n_channels_group) if use_residuals else \
                                  nn.ModuleDict({'norm': nn.GroupNorm(n_channels_group, out_ch), 'ada_proj': nn.Linear(emb_dim, out_ch * 2)})
@@ -278,11 +315,11 @@ class UNet_FM(nn.Module):
                 )
             self.ups.append(layers)
 
-
         self.act_gelu = nn.GELU()
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.last = nn.Conv2d(filters_arr[0], in_channels, kernel_size=3, padding=1)
-        nn.init.zeros_(self.last.weight); nn.init.zeros_(self.last.bias)
+                
+        self.last = nn.Conv2d(filters_arr[0], in_channels, kernel_size=3, padding=1, padding_mode = 'reflect')
+        nn.init.zeros_(self.last.weight)
+        nn.init.zeros_(self.last.bias)
 
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -295,8 +332,8 @@ class UNet_FM(nn.Module):
         y_feat = self.label_emb(y)
         
         if self.use_cross:
-            y_global = y_feat.mean(dim=[2, 3]) # Flatten via mean
-            y_global = self.global_proj(y_global) # Project to label_emb_size
+            y_global = y_feat.mean(dim=[2, 3]) 
+            y_global = self.global_proj(y_global) 
         else:
             y_global = y_feat
 
@@ -308,9 +345,15 @@ class UNet_FM(nn.Module):
         skips = []
         for i, down in enumerate(self.downs):
             x = down['conv'](x)
-            x = down['residual'](x, combined_emb) if self.use_residuals else self.act_gelu(self.apply_adagn(x, combined_emb, down['norm'], down['ada_proj']))
+            
+            if self.use_residuals:
+                x = down['residual'](x, combined_emb)
+            else:
+                x = self.act_gelu(self.apply_adagn(x, combined_emb, down['norm'], down['ada_proj']))
+            
             if i < len(self.downs)-1:
-                skips.append(x); x = self.pool(x)
+                skips.append(x) 
+                x = down['downsample'](x)
 
         x = self.mid_res(x, combined_emb)
         
@@ -322,13 +365,19 @@ class UNet_FM(nn.Module):
         for up in self.ups:
             x = up['upsample'](x)
             skip = skips.pop()
-            if x.shape != skip.shape: x = F.interpolate(x, size=skip.shape[2:], mode='bilinear')
+            
+            if x.shape != skip.shape: 
+                x = F.interpolate(x, size=skip.shape[2:], mode='bilinear')
+                
             x = up['convskip'](torch.cat([x, skip], dim=1))
 
             if self.use_cross:
                 x = up['cross_attn'](x, y_feat)
 
-            x = up['residual'](x, combined_emb) if self.use_residuals else self.act_gelu(self.apply_adagn(x, combined_emb, up['norm'], up['ada_proj']))
+            if self.use_residuals:
+                x = up['residual'](x, combined_emb)
+            else:
+                x = self.act_gelu(self.apply_adagn(x, combined_emb, up['norm'], up['ada_proj']))
 
         return self.last(x)
 
