@@ -19,15 +19,8 @@ def get_optimizer(model, training_config):
             base_params.append(param)
 
     param_groups = [
-        {
-            "params": base_params, 
-            "lr": lr
-        },
-        {
-            "params": backbone_params, 
-            "lr": lr * backbone_lr_ratio,
-            "weight_decay": weight_decay
-        }
+        {"params": base_params,     "lr": lr,                      "weight_decay": weight_decay},
+        {"params": backbone_params, "lr": lr * backbone_lr_ratio,  "weight_decay": weight_decay},
     ]
 
     if opt_type == "Adam":

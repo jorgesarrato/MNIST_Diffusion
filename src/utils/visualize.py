@@ -154,7 +154,7 @@ def process_rgb_for_plot(img_tensor):
         img = img.numpy()
     return img
 
-def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
+def visualize_depth_evolution_step_rgb(snapshot, downsample_factor=4, axes=None):
 
     if axes is None:
         fig, ax = plt.subplots(1, 2, figsize=(10, 5))
@@ -206,32 +206,113 @@ def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
 
     return ax
 
+def process_image_for_plot(img_tensor):
+    if isinstance(img_tensor, torch.Tensor):
+        img = img_tensor.detach().cpu()
+        if img.ndim == 4:
+            img = img.squeeze(0)  # (C, H, W)
+            
+        if img.shape[0] == 3:
+            # 3 Channels: RGB
+            img = img.permute(1, 2, 0).numpy()
+        elif img.shape[0] == 1:
+            # 1 Channel: Depth/Grayscale
+            img = img.squeeze(0).numpy()  # (H, W)
+        else:
+            img = img.numpy()
+    return img
+
+def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
+    if axes is None:
+        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    else:
+        ax = axes
+
+    depth_map = snapshot['image']
+    v_field = snapshot['v_field']
+    condition = snapshot.get('label')
+
+    ax[0].clear()
+    if condition is not None:
+        # Process the condition (Now handles 1 or 3 channels)
+        cond_img = process_image_for_plot(condition)
+        
+        # Denormalize from [-1, 1] to [0, 1]
+        cond_img = (cond_img + 1) / 2
+        
+        # Check if it is grayscale (2D) or RGB (3D)
+        if cond_img.ndim == 2:
+            ax[0].imshow(cond_img, cmap='viridis') # Use 'gray' or 'viridis' for depth
+            ax[0].set_title("Depth Condition")
+        else:
+            ax[0].imshow(cond_img)
+            ax[0].set_title("RGB Condition")
+    else:
+        ax[0].text(0.5, 0.5, "No Condition", ha='center')
+    ax[0].axis('off')
+
+    ax[1].clear()
+    
+    # Process the reconstruction depth map (assumed to be 1-channel)
+    if isinstance(depth_map, torch.Tensor):
+        depth_map = depth_map.detach().cpu().squeeze().numpy()
+        
+    depth_map = (depth_map + 1) / 2
+    ax[1].imshow(depth_map, cmap='inferno', origin='upper')
+
+    if v_field is not None:
+        # Vector field processing remains the same...
+        def block_mean(ar, fact):
+            h, w = ar.shape
+            h_crop = (h // fact) * fact
+            w_crop = (w // fact) * fact
+            ar_cropped = ar[:h_crop, :w_crop]
+            return ar_cropped.reshape(h_crop // fact, fact, w_crop // fact, fact).mean(axis=(1, 3))
+
+        if isinstance(v_field, torch.Tensor):
+            v_field = v_field.detach().cpu().squeeze().numpy()
+
+        v_field_small = block_mean(v_field, downsample_factor)
+        dy, dx = np.gradient(v_field_small)
+
+        h_s, w_s = v_field_small.shape
+        y = np.arange(h_s) * downsample_factor + downsample_factor / 2 - 0.5
+        x = np.arange(w_s) * downsample_factor + downsample_factor / 2 - 0.5
+        X, Y = np.meshgrid(x, y)
+
+        ax[1].quiver(X, Y, dx, -dy, 
+                  color='white', alpha=0.6, scale=None, width=0.005, pivot='mid')
+
+    ax[1].set_title(f'Depth Reconstruction (t = {snapshot["t"]:.2f})')
+    ax[1].axis('off')
+
+    return ax
+
 def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1, downsample_factor=10):
     total_snaps = len(snapshots)
     if (n_steps <= 0) or (n_steps > total_snaps):
         n_steps = total_snaps
 
     if timing_mode == 'linear':
-        snapshots = [snapshots[int(i*total_snaps/n_steps)] for i in range(n_steps)]
+        indices = [int(i * total_snaps / n_steps) for i in range(n_steps)]
     elif timing_mode == 'quadratic':
-        snapshots = [snapshots[int(i**2*total_snaps/n_steps**2)] for i in range(n_steps)]
+        indices = [int(i**2 * total_snaps / n_steps**2) for i in range(n_steps)]
     elif timing_mode == 'inv_quadratic':
-        snapshots = [snapshots[int((i / (n_steps - 1))**0.5 * (total_snaps - 1))] for i in range(n_steps)]
+        indices = [int((i / (n_steps - 1))**0.5 * (total_snaps - 1)) for i in range(n_steps)]
     elif timing_mode == 'logarithmic':
-        indices = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps, dtype = int)
-        selected_snapshots = [snapshots[i] for i in reversed(indices)]
+        raw = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps, dtype=int)
+        indices = [int(i) for i in reversed(raw)]
     else:
         raise ValueError(f"Timing mode {timing_mode} not supported.")
-    
-    if timing_mode != 'logarithmic':
-        indices = [min(i, total_snaps - 1) for i in indices]
-        selected_snapshots = [snapshots[i] for i in indices]
+
+    indices = [min(i, total_snaps - 1) for i in indices]
+    selected_snapshots = [snapshots[i] for i in indices]
 
     fig, ax = plt.subplots(1, 2, figsize=(10, 5), dpi=100)
     plt.tight_layout()
     
     def update(i):
-        visualize_depth_evolution_step(selected_snapshots[i], axes=ax, downsample_factor=downsample_factor)
+        visualize_depth_evolution_step_rgb(selected_snapshots[i], axes=ax, downsample_factor=downsample_factor)
 
     anim = FuncAnimation(fig, update, frames=len(selected_snapshots), interval=100)
     anim.save(filename, writer='pillow')
