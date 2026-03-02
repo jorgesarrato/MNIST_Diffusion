@@ -47,7 +47,7 @@ class Config:
             "patience": 30,
             "threshold": 0.005,
             "loss": "L1",
-            "weight_type": "linear",
+            "weight_type": "none",
             "time_sampling": "logit_normal",
             "backbone_lr_ratio": 0.1,
             "scheduler": "OneCycleLR",

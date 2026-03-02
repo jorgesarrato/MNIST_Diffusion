@@ -28,9 +28,10 @@ class CombinedLoss(nn.Module):
         self.base_loss = nn.L1Loss(reduction='none') if base_type == "L1" else nn.MSELoss(reduction='none')
         self.grad_weight = grad_weight
 
-    def forward(self, pred, target):
-        base = self.base_loss(pred, target).mean(dim=(1, 2, 3))
-        grad = compute_gradient_loss(pred, target)
+    def forward(self, v_pred, v_target, x1_pred, x_target):
+        base = self.base_loss(v_pred, v_target).mean(dim=(1, 2, 3))
+        
+        grad = compute_gradient_loss(x1_pred, x_target)
         
         return base + (self.grad_weight * grad)
 
@@ -39,9 +40,9 @@ class PerSampleLoss(nn.Module):
         super().__init__()
         self.loss = nn.L1Loss(reduction='none') if base_type == "L1" else nn.MSELoss(reduction='none')
 
-    def forward(self, pred, target):
-        return self.loss(pred, target).mean(dim=(1, 2, 3))
-
+    def forward(self, v_pred, v_target, x1_pred=None, x_target=None):
+        return self.loss(v_pred, v_target).mean(dim=(1, 2, 3))
+    
 LOSS_MAP = {
     "L1":       PerSampleLoss("L1"),
     "MSE":      PerSampleLoss("MSE"),
@@ -74,7 +75,9 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
 
             v_pred = model(xt, t, y).view_as(v)
 
-            per_sample_loss = loss_fn(v_pred, v)
+            x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
+                
+            per_sample_loss = loss_fn(v_pred, v, x1_pred, x)
 
             weights = get_loss_weights(t, weight_type=weight_type)
 
@@ -147,7 +150,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 v = x - x0
 
                 v_pred = model(xt, t, y).view_as(v)
-                per_sample_loss = loss_fn(v_pred, v)
+                x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
+                per_sample_loss = loss_fn(v_pred, v, x1_pred, x)
                 weights = get_loss_weights(t, weight_type=weight_type)
                 loss = (per_sample_loss * weights).mean()
 
