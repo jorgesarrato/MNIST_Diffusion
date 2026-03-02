@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import mlflow
+from torchvision.transforms import v2
 
 def get_loss_weights(t, weight_type="quad", min_weight=0.1):
     if weight_type == "quad":
@@ -61,6 +62,7 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
         for x, y in dataloader_val:
             x = x.to(device)
             y = y.to(device)
+            y = (y / 255.0) * 2.0 - 1.0
 
             x0 = torch.randn_like(x)
             t = torch.rand(size=(x.shape[0],), device=device)
@@ -79,50 +81,76 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
 
     return total_loss_val/len(dataloader_val)
 
+def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str='L1_Grad', dataloader_val=None,
+          overfit_x0=None, weight_type='quad', side_pixels=128):
+    
+    _GPU_SPATIAL = v2.Compose([
+        v2.RandomHorizontalFlip(p=0.5),
+        v2.RandomResizedCrop(size=(side_pixels, side_pixels), scale=(0.8, 1.0), antialias=True),
+    ])
+    _GPU_COLOR = v2.ColorJitter(brightness=0.2, contrast=0.2)
 
-def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str = 'L1_Grad', dataloader_val = None, overfit_x0=None, weight_type='quad'):
     if loss_fn_str not in LOSS_MAP.keys():
         raise ValueError(f"Loss function {loss_fn_str} not supported.")
 
     loss_fn = LOSS_MAP[loss_fn_str]
-
     model.to(device)
 
+    use_cuda = 'cuda' in str(device)
+    device_type = 'cuda' if use_cuda else 'cpu'
+    scaler = torch.amp.GradScaler('cuda', enabled=use_cuda)
+
+    is_batch_scheduler = isinstance(scheduler, (
+        torch.optim.lr_scheduler.OneCycleLR, 
+        torch.optim.lr_scheduler.CyclicLR, 
+        torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+    ))
+    is_plateau_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
+
     for epoch in range(epochs):
+        model.train()
         total_loss = 0
 
-        model.train()
         for x, y in dataloader_train:
             x = x.to(device)
             y = y.to(device)
+            y = (y / 255.0) * 2.0 - 1.0
 
-            optimizer.zero_grad()
+            stacked = torch.cat([y, x], dim=1)
+            stacked = _GPU_SPATIAL(stacked)
+            y, x = stacked[:, :3], stacked[:, 3:4]
+            y = _GPU_COLOR(y)
+
+            optimizer.zero_grad(set_to_none=True)
             
             if overfit_x0 is None:
                 x0 = torch.randn_like(x)
             else:
                 x0 = overfit_x0.repeat(x.shape[0], 1, 1, 1)
 
+            with torch.amp.autocast(device_type=device_type, enabled=use_cuda):
+                t = torch.rand(size=(x.shape[0],), device=device)
+                xt = t[:, None, None, None] * x + (1 - t[:, None, None, None]) * x0
+                v = x - x0
 
-            t = torch.rand(size=(x.shape[0],), device=device)
-            xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
-            xt.to(device)
-            v = x-x0
+                v_pred = model(xt, t, y).view_as(v)
+                per_sample_loss = loss_fn(v_pred, v)
+                weights = get_loss_weights(t, weight_type=weight_type)
+                loss = (per_sample_loss * weights).mean()
 
-            v_pred = model(xt, t, y).view_as(v)
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
 
-            per_sample_loss = loss_fn(v_pred, v)
-
-            weights = get_loss_weights(t, weight_type=weight_type)
-
-            loss = (per_sample_loss * weights).mean()
-
-            loss.backward()
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
+            
+            if scheduler is not None and is_batch_scheduler:
+                scheduler.step()
 
             total_loss += loss.item()
 
-        avg_loss = total_loss/len(dataloader_train)
+        avg_loss = total_loss / len(dataloader_train)
         current_lr = optimizer.param_groups[0]['lr']
 
         if mlflow.active_run():
@@ -136,9 +164,18 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 mlflow.log_metric("val_loss", avg_loss_val, step=epoch)
 
             print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, Val_Loss: {avg_loss_val:.6f}, LR: {current_lr:.6f}')
-            scheduler.step(avg_loss_val)
+            
+            if scheduler is not None and not is_batch_scheduler:
+                if is_plateau_scheduler:
+                    scheduler.step(avg_loss_val)
+                else:
+                    scheduler.step()
 
         else:
             print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, LR: {current_lr:.6f}')
-            scheduler.step(avg_loss)
-        
+            
+            if scheduler is not None and not is_batch_scheduler:
+                if is_plateau_scheduler:
+                    scheduler.step(avg_loss)
+                else:
+                    scheduler.step()

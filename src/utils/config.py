@@ -6,11 +6,12 @@ load_dotenv()
 class Config:
     DATA_DIR = os.getenv("DATA_DIR")
     NYU_DATA_DIR = os.getenv("DATA_NYU_DIR")
+    MLFLOW_DIR = os.getenv("MLFLOW_DIR")
 
     RANDOM_SEED = 46020
 
     experiment_name = "UNet_FM_conditioned"
-    run_name = "SelfLabel"
+    run_name = "Residual-CrossAttn-PosSinCosEmbed"
 
     data_config = {
             "data_dir": DATA_DIR,
@@ -21,8 +22,8 @@ class Config:
         }
     model_config = {
             "type": "UNet_FM",
-            "filters_arr": [128, 256, 512],
-            "encoder_filters_arr": [128, 256, 512],
+            "filters_arr": [64, 128, 256],
+            "encoder_filters_arr": [64, 128, 256],
             "encoder_denses_arr": [512, 256, 128],
             "t_emb_size": 512,
             "label_emb_size": 1024,
@@ -33,18 +34,24 @@ class Config:
             "attn": True,
             "cross_attn": True,
             "use_residuals": True,
-            "cond_type": "concat",
+            "cond_type": "simple",
             "encoder_type": "resnet"
         }
     training_config = {
-            "lr": 1e-4,
-            "epochs": 100,
+            "lr": 2e-4,
+            "epochs": 500,
             "optimizer": "AdamW",
-            "weight_decay": 0.01,
+            "weight_decay": 0.05,
             "scheduler_factor": 0.5,
             "patience": 5,
+            "min_lr": 5e-6,
+            "threshold": 0.005,
             "loss": "L1_Grad",
             "weight_type": "quad",
-            "backbone_lr_ratio": 0.1
+            "backbone_lr_ratio": 0.1,
+            "scheduler": "OneCycleLR",
+            "pct_start": 0.1,
+            "final_div_factor": 10.0,
+            "div_factor": 25.0
             }
 
