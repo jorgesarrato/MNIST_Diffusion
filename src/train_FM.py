@@ -6,7 +6,6 @@ from torchvision.transforms import v2
 def get_loss_weights(t, weight_type="quad", min_weight=0.1):
     if weight_type == "quad":
         return (t**2) + min_weight
-        
     else:
         return torch.ones_like(t)
 
@@ -25,20 +24,18 @@ def compute_gradient_loss(pred, target):
 class CombinedLoss(nn.Module):
     def __init__(self, base_type="L1", grad_weight=0.5):
         super().__init__()
-        self.base_loss = nn.L1Loss(reduction='none') if base_type == "L1" else nn.MSELoss(reduction='none')
+        self.base_loss = nn.SmoothL1Loss(reduction='none', beta=0.05) if base_type == "L1" else nn.MSELoss(reduction='none')
         self.grad_weight = grad_weight
 
     def forward(self, v_pred, v_target, x1_pred, x_target):
         base = self.base_loss(v_pred, v_target).mean(dim=(1, 2, 3))
-        
         grad = compute_gradient_loss(x1_pred, x_target)
-        
         return base + (self.grad_weight * grad)
 
 class PerSampleLoss(nn.Module):
     def __init__(self, base_type="L1"):
         super().__init__()
-        self.loss = nn.L1Loss(reduction='none') if base_type == "L1" else nn.MSELoss(reduction='none')
+        self.loss = nn.SmoothL1Loss(reduction='none', beta=0.05) if base_type == "L1" else nn.MSELoss(reduction='none')
 
     def forward(self, v_pred, v_target, x1_pred=None, x_target=None):
         return self.loss(v_pred, v_target).mean(dim=(1, 2, 3))
@@ -55,46 +52,44 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
         raise ValueError(f"Loss function {loss_fn_str} not supported.")
 
     loss_fn = LOSS_MAP[loss_fn_str]
-
     model.eval()
-
     total_loss_val = 0
+
     with torch.no_grad():
         for x, y in dataloader_val:
-            x = x.to(device)
-            y = y.to(device)
-            y = (y / 255.0)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
             x0 = torch.randn_like(x)
             if time_sampling == "logit_normal":
                 t = torch.sigmoid(torch.randn(size=(x.shape[0],), device=device))
-            else: # Default to uniform
+            else:
                 t = torch.rand(size=(x.shape[0],), device=device)
+                
             xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
             v = x-x0
 
-            v_pred = model(xt, t, y).view_as(v)
-
-            x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
+            with torch.amp.autocast('cuda'):
+                v_pred = model(xt, t, y).view_as(v)
+                x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
+                per_sample_loss = loss_fn(v_pred, v, x1_pred, x)
                 
-            per_sample_loss = loss_fn(v_pred, v, x1_pred, x)
-
             weights = get_loss_weights(t, weight_type=weight_type)
-
             loss = (per_sample_loss * weights).mean()
-
             total_loss_val += loss.item()
 
-    return total_loss_val/len(dataloader_val)
+    model.train()
+    return total_loss_val / len(dataloader_val)
+
 
 def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str='L1_Grad', dataloader_val=None,
-          overfit_x0=None, weight_type='quad', side_pixels=128, patience = 5, time_sampling='uniform'):
+          overfit_x0=None, weight_type='quad', side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10):
     
     _GPU_SPATIAL = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
-        v2.RandomResizedCrop(size=(side_pixels, side_pixels), scale=(0.8, 1.0), antialias=True),
+        v2.RandomResizedCrop(size=(side_pixels, side_pixels), scale=(0.75, 1.0), antialias=True),
     ])
-    _GPU_COLOR = v2.ColorJitter(brightness=0.2, contrast=0.2)
+    _GPU_COLOR = v2.ColorJitter(brightness=0.15, contrast=0.1, saturation=0.1)
 
     if loss_fn_str not in LOSS_MAP.keys():
         raise ValueError(f"Loss function {loss_fn_str} not supported.")
@@ -113,21 +108,16 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
     ))
     is_plateau_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
 
-    is_onecycle_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR)
-    if is_onecycle_scheduler:
-        scheduler_warmup_epochs = int(epochs * 0.1)
-
     best_val   = float('inf')
     no_improve = 0
 
-    for epoch in range(epochs):
+    for epoch in range(1, epochs + 1):
         model.train()
         total_loss = 0
 
         for x, y in dataloader_train:
-            x = x.to(device)
-            y = y.to(device)
-            y = (y / 255.0)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
             stacked = torch.cat([y, x], dim=1)
             stacked = _GPU_SPATIAL(stacked)
@@ -146,11 +136,13 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                     t = torch.sigmoid(torch.randn(size=(x.shape[0],), device=device))
                 else:
                     t = torch.rand(size=(x.shape[0],), device=device)
+                    
                 xt = t[:, None, None, None] * x + (1 - t[:, None, None, None]) * x0
                 v = x - x0
 
                 v_pred = model(xt, t, y).view_as(v)
                 x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
+                
                 per_sample_loss = loss_fn(v_pred, v, x1_pred, x)
                 weights = get_loss_weights(t, weight_type=weight_type)
                 loss = (per_sample_loss * weights).mean()
@@ -168,32 +160,33 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
             total_loss += loss.item()
 
         avg_loss = total_loss / len(dataloader_train)
-        current_lr = optimizer.param_groups[0]['lr']
+        current_lr = scheduler.get_last_lr()[0] if scheduler and is_batch_scheduler else optimizer.param_groups[0]['lr']
 
         if mlflow.active_run():
             mlflow.log_metric("train_loss", avg_loss, step=epoch)
             mlflow.log_metric("learning_rate", current_lr, step=epoch)
 
-        if dataloader_val is not None:
+        if dataloader_val is not None and (epoch % eval_freq == 0 or epoch == 1):
             avg_loss_val = evaluate(model, dataloader_val, device, loss_fn_str, weight_type, time_sampling)
 
             if mlflow.active_run():
                 mlflow.log_metric("val_loss", avg_loss_val, step=epoch)
 
-            print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, Val_Loss: {avg_loss_val:.6f}, LR: {current_lr:.6f}')
-
             if avg_loss_val < best_val:
                 best_val = avg_loss_val
                 no_improve = 0
+                print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val: {avg_loss_val:.4f} | LR: {current_lr:.6f} *** NEW BEST! ***', flush=True)
+                
                 m = model.module if hasattr(model, 'module') else model
                 torch.save(m.state_dict(), "model_best.pth")
                 if mlflow.active_run():
                     mlflow.log_metric("best_val_loss", best_val, step=epoch)
             else:
-                if (not is_onecycle_scheduler) or (epoch >= scheduler_warmup_epochs):
-                    no_improve += 1
+                no_improve += 1
+                print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val: {avg_loss_val:.4f} | LR: {current_lr:.6f} | Patience: {no_improve}/{patience}', flush=True)
+                
                 if no_improve >= patience:
-                    print(f"Early stopping at epoch {epoch+1}", flush=True)
+                    print(f"\nEarly stopping triggered at epoch {epoch}!", flush=True)
                     break
             
             if scheduler is not None and not is_batch_scheduler:
@@ -202,8 +195,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 else:
                     scheduler.step()
 
-        else:
-            print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, LR: {current_lr:.6f}')
+        elif dataloader_val is None:
+            print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | LR: {current_lr:.6f}', flush=True)
             
             if scheduler is not None and not is_batch_scheduler:
                 if is_plateau_scheduler:
