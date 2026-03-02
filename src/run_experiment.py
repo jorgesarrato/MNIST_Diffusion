@@ -27,15 +27,19 @@ def run():
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
     train_dataset = nyu_depth_dataset(x_train, y_train, train = True, side_pixels=Config.data_config['side_pixels'])
-    train_dataset_noaug = nyu_depth_dataset(x_train, y_train, train = False, side_pixels=Config.data_config['side_pixels'])
-    val_dataset = nyu_depth_dataset(x_val, y_val, train = False, side_pixels=Config.data_config['side_pixels'])
-    test_dataset = nyu_depth_dataset(x_test, y_test, train = False, side_pixels=Config.data_config['side_pixels'])
+    train_dataset_noaug = nyu_depth_dataset(x_train, y_train, train = False, side_pixels=Config.data_config['side_pixels']
+                                            , depth_min = train_dataset.depth_min, depth_max = train_dataset.depth_max)
+    val_dataset = nyu_depth_dataset(x_val, y_val, train = False, side_pixels=Config.data_config['side_pixels']
+                                    , depth_min = train_dataset.depth_min, depth_max = train_dataset.depth_max)
+    test_dataset = nyu_depth_dataset(x_test, y_test, train = False, side_pixels=Config.data_config['side_pixels']
+                                     , depth_min = train_dataset.depth_min, depth_max = train_dataset.depth_max)
 
     train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True, num_workers=Config.data_config['num_workers'])
     val_loader = DataLoader(val_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'])
     test_loader = DataLoader(test_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'])
 
     model = get_model(Config.model_config)
+    model.to(device)
     optimizer = get_optimizer(model, Config.training_config)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
@@ -43,6 +47,7 @@ def run():
         patience=Config.training_config['patience']
     )
 
+    mlflow.set_tracking_uri("file://" + Config.MLFLOW_DIR)
     mlflow.set_experiment(Config.experiment_name)
 
     
@@ -64,7 +69,6 @@ def run():
             loss_fn_str=Config.training_config['loss'],
             weight_type=Config.training_config['weight_type']
         )
-
         test_loss = evaluate(model, test_loader, device)
         print(f"Test Loss: {test_loss:.6f}")
         mlflow.log_metric("test_loss", test_loss, step=Config.training_config['epochs'])

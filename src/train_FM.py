@@ -33,11 +33,19 @@ class CombinedLoss(nn.Module):
         
         return base + (self.grad_weight * grad)
 
+class PerSampleLoss(nn.Module):
+    def __init__(self, base_type="L1"):
+        super().__init__()
+        self.loss = nn.L1Loss(reduction='none') if base_type == "L1" else nn.MSELoss(reduction='none')
+
+    def forward(self, pred, target):
+        return self.loss(pred, target).mean(dim=(1, 2, 3))
+
 LOSS_MAP = {
-    "L1": nn.L1Loss(),
-    "MSE": nn.MSELoss(),
-    "L1_Grad": CombinedLoss(base_type="L1", grad_weight=0.5),
-    "MSE_Grad": CombinedLoss(base_type="MSE", grad_weight=0.5)
+    "L1":       PerSampleLoss("L1"),
+    "MSE":      PerSampleLoss("MSE"),
+    "L1_Grad":  CombinedLoss(base_type="L1",  grad_weight=0.5),
+    "MSE_Grad": CombinedLoss(base_type="MSE", grad_weight=0.5),
 }
 
 def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type='quad'):

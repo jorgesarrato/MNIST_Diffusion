@@ -9,6 +9,9 @@ class ResNet_Encoder(nn.Module):
     def __init__(self, target_spatial_ch, label_emb_size, num_unet_downs, condition_ch = 3, denses_arr=None, return_spatial=True):
         super().__init__()
         self.return_spatial = return_spatial
+
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std',  torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
         
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
@@ -55,6 +58,9 @@ class ResNet_Encoder(nn.Module):
             )
 
     def forward(self, x):
+        if x.shape[1] == 3:
+            x = (x + 1.0) / 2.0
+            x = (x - self.mean) / self.std
         feat = self.backbone(x)
         feat = self.spatial_proj(feat)
         feat = self.norm(feat)
