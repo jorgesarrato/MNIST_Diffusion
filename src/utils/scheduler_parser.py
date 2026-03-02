@@ -20,7 +20,7 @@ def get_scheduler(optimizer, training_config, steps_per_epoch=None):
         
         return lr_scheduler.OneCycleLR(
             optimizer,
-            max_lr=max_lr,
+            max_lr=[max_lr, max_lr * training_config.get('backbone_lr_ratio', 0.1)],
             epochs=epochs,
             steps_per_epoch=steps_per_epoch,
             pct_start=pct_start,

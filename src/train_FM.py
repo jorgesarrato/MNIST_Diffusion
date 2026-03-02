@@ -49,7 +49,7 @@ LOSS_MAP = {
     "MSE_Grad": CombinedLoss(base_type="MSE", grad_weight=0.5),
 }
 
-def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type='quad'):
+def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type='quad', time_sampling='uniform'):
     if loss_fn_str not in LOSS_MAP.keys():
         raise ValueError(f"Loss function {loss_fn_str} not supported.")
 
@@ -65,7 +65,10 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
             y = (y / 255.0)
 
             x0 = torch.randn_like(x)
-            t = torch.rand(size=(x.shape[0],), device=device)
+            if time_sampling == "logit_normal":
+                t = torch.sigmoid(torch.randn(size=(x.shape[0],), device=device))
+            else: # Default to uniform
+                t = torch.rand(size=(x.shape[0],), device=device)
             xt = t[:, None, None, None]*x + (1-t[:, None, None, None])*x0
             v = x-x0
 
@@ -82,7 +85,7 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
     return total_loss_val/len(dataloader_val)
 
 def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str='L1_Grad', dataloader_val=None,
-          overfit_x0=None, weight_type='quad', side_pixels=128, patience = 5):
+          overfit_x0=None, weight_type='quad', side_pixels=128, patience = 5, time_sampling='uniform'):
     
     _GPU_SPATIAL = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
@@ -107,6 +110,10 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
     ))
     is_plateau_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
 
+    is_onecycle_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR)
+    if is_onecycle_scheduler:
+        scheduler_warmup_epochs = int(epochs * 0.1)
+
     best_val   = float('inf')
     no_improve = 0
 
@@ -117,12 +124,12 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
         for x, y in dataloader_train:
             x = x.to(device)
             y = y.to(device)
+            y = (y / 255.0)
 
             stacked = torch.cat([y, x], dim=1)
             stacked = _GPU_SPATIAL(stacked)
             y, x = stacked[:, :3], stacked[:, 3:4]
             y = _GPU_COLOR(y)
-            y = (y / 255.0)
 
             optimizer.zero_grad(set_to_none=True)
             
@@ -132,7 +139,10 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 x0 = overfit_x0.repeat(x.shape[0], 1, 1, 1)
 
             with torch.amp.autocast(device_type=device_type, enabled=use_cuda):
-                t = torch.rand(size=(x.shape[0],), device=device)
+                if time_sampling == "logit_normal":
+                    t = torch.sigmoid(torch.randn(size=(x.shape[0],), device=device))
+                else:
+                    t = torch.rand(size=(x.shape[0],), device=device)
                 xt = t[:, None, None, None] * x + (1 - t[:, None, None, None]) * x0
                 v = x - x0
 
@@ -161,7 +171,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
             mlflow.log_metric("learning_rate", current_lr, step=epoch)
 
         if dataloader_val is not None:
-            avg_loss_val = evaluate(model, dataloader_val, device, loss_fn_str, weight_type)
+            avg_loss_val = evaluate(model, dataloader_val, device, loss_fn_str, weight_type, time_sampling)
 
             if mlflow.active_run():
                 mlflow.log_metric("val_loss", avg_loss_val, step=epoch)
@@ -176,7 +186,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 if mlflow.active_run():
                     mlflow.log_metric("best_val_loss", best_val, step=epoch)
             else:
-                no_improve += 1
+                if (not is_onecycle_scheduler) or (epoch >= scheduler_warmup_epochs):
+                    no_improve += 1
                 if no_improve >= patience:
                     print(f"Early stopping at epoch {epoch+1}", flush=True)
                     break

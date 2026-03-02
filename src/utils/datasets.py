@@ -17,11 +17,10 @@ class mnist_dataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx]
 
 class nyu_depth_dataset(torch.utils.data.Dataset):
-    def __init__(self, x, y, side_pixels=128, depth_min=None, depth_max=None, train=True):
+    def __init__(self, x, y, side_pixels=128, depth_min=None, depth_max=None):
         self.images     = x.astype(np.float32)
         self.depths     = y.astype(np.float32)
         self.side_pixels = side_pixels
-        self.train = train
 
         mask = self.depths > 0.01
         self.depth_min = float(self.depths[mask].min()) if depth_min is None else depth_min
@@ -39,16 +38,7 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
         depth = depth * 2.0 - 1.0
 
         stacked = torch.cat([img, depth], dim=0)
-        if self.train:
-            if random.random() < 0.5:
-                stacked = v2.RandomCrop(self.side_pixels)(stacked)
-            else:
-                stacked = v2.Resize((self.side_pixels, self.side_pixels),
-                                    antialias=True)(stacked)
-        else:
-            stacked = v2.Resize((self.side_pixels, self.side_pixels),
-                        antialias=True)(stacked)
+        stacked = v2.Resize((self.side_pixels, self.side_pixels), antialias=True)(stacked)
         
         img, depth = stacked[:3], stacked[3:4]
-
         return depth, img

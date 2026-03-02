@@ -21,6 +21,7 @@ def run():
 
     torch.manual_seed(Config.RANDOM_SEED)
     if device == 'cuda':
+        print("Using GPU")
         torch.cuda.manual_seed_all(Config.RANDOM_SEED)
 
     x, y = load_nyu_labeled_subset(os.path.join(Config.NYU_DATA_DIR, 'nyu_depth_v2_labeled.mat'))
@@ -28,23 +29,17 @@ def run():
     x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
-    train_dataset = nyu_depth_dataset(x_train, y_train, side_pixels=Config.data_config['side_pixels'], train=True)
+    train_dataset = nyu_depth_dataset(x_train, y_train, side_pixels=Config.data_config['side_pixels'])
 
     val_dataset  = nyu_depth_dataset(x_val,  y_val,
         side_pixels=Config.data_config['side_pixels'],
         depth_min=train_dataset.depth_min,
-        depth_max=train_dataset.depth_max,
-        train=False)
+        depth_max=train_dataset.depth_max)
 
     test_dataset = nyu_depth_dataset(x_test, y_test,
         side_pixels=Config.data_config['side_pixels'],
         depth_min=train_dataset.depth_min,
-        depth_max=train_dataset.depth_max,
-        train=False)
-
-    train_dataset_noaug = nyu_depth_dataset(x_train, y_train, side_pixels=Config.data_config['side_pixels'], train=False)
-
-
+        depth_max=train_dataset.depth_max)
 
     train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True, num_workers=Config.data_config['num_workers_train'],
                               pin_memory=True, persistent_workers=True, prefetch_factor=2, drop_last=True)
@@ -87,10 +82,11 @@ def run():
             device=device,
             loss_fn_str=Config.training_config['loss'],
             weight_type=Config.training_config['weight_type'],
+            time_sampling=Config.training_config.get('time_sampling', 'uniform'),
             side_pixels=Config.data_config['side_pixels'],
             patience=Config.training_config['patience']
         )
-        test_loss = evaluate(model, test_loader, device)
+        test_loss = evaluate(model, test_loader, device, Config.training_config['loss'], Config.training_config['weight_type'], Config.training_config.get('time_sampling', 'uniform'))
         print(f"Test Loss: {test_loss:.6f}")
         mlflow.log_metric("test_loss", test_loss, step=Config.training_config['epochs'])
 
@@ -108,7 +104,7 @@ def run():
             #create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset_noaug[ii][1]/255, device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset[ii][1]/255, device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_train_{ii}.pt")
             mlflow.log_artifact(f"snapshots_train_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_train_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
