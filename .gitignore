@@ -4,6 +4,7 @@ mlflow.db
 mlruns*
 model_final.pth
 model_best.pth
+*.pth
 *.err
 *.out
 flow*.gif
