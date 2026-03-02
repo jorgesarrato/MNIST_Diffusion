@@ -1,7 +1,7 @@
 import torch
 from torchvision.transforms import v2
 import numpy as np
-import torch.nn.functional as F
+import random
 
 class mnist_dataset(torch.utils.data.Dataset):
     def __init__(self, x, y):
@@ -17,53 +17,38 @@ class mnist_dataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx]
 
 class nyu_depth_dataset(torch.utils.data.Dataset):
-    def __init__(self, x, y, train=True, side_pixels=128, depth_min = None, depth_max = None):
-        self.images = x.astype(np.float32)
-        self.depths = y.astype(np.float32)
+    def __init__(self, x, y, side_pixels=128, depth_min=None, depth_max=None, train=True):
+        self.images     = x.astype(np.float32)
+        self.depths     = y.astype(np.float32)
         self.side_pixels = side_pixels
         self.train = train
 
         mask = self.depths > 0.01
-
-        if depth_min is None or depth_max is None:
-            mask = self.depths > 0.01
-            self.depth_min = float(self.depths[mask].min())
-            self.depth_max = float(self.depths[mask].max())
-        else:
-            self.depth_min = depth_min
-            self.depth_max = depth_max
+        self.depth_min = float(self.depths[mask].min()) if depth_min is None else depth_min
+        self.depth_max = float(self.depths[mask].max()) if depth_max is None else depth_max
 
     def __len__(self):
         return self.images.shape[0]
-
+    
     def __getitem__(self, idx):
-        img = torch.from_numpy(self.images[idx])
+        img   = torch.from_numpy(self.images[idx])
         depth = torch.from_numpy(self.depths[idx]).unsqueeze(0)
-
 
         depth = torch.clamp(depth, self.depth_min, self.depth_max)
         depth = (depth - self.depth_min) / (self.depth_max - self.depth_min)
+        depth = depth * 2.0 - 1.0
 
-        depth = (depth * 2.0) - 1.0 # to [-1, 1]
-
-        img = ((img / 255.0) * 2) - 1.0 # to [-1, 1]
-
+        stacked = torch.cat([img, depth], dim=0)
         if self.train:
-            stacked = torch.cat([img, depth], dim=0)
-            
-            stacked = v2.RandomHorizontalFlip(p=0.5)(stacked)
-            stacked = v2.RandomResizedCrop(
-                size=(self.side_pixels, self.side_pixels), 
-                scale=(0.8, 1.0),
-                antialias=True
-            )(stacked)
-            
-            img, depth = torch.split(stacked, [3, 1], dim=0)
-            
-            img = v2.ColorJitter(brightness=0.2, contrast=0.2)(img)
+            if random.random() < 0.5:
+                stacked = v2.RandomCrop(self.side_pixels)(stacked)
+            else:
+                stacked = v2.Resize((self.side_pixels, self.side_pixels),
+                                    antialias=True)(stacked)
         else:
-            img = v2.Resize((self.side_pixels, self.side_pixels), antialias=True)(img)
-            depth = v2.Resize((self.side_pixels, self.side_pixels), antialias=True)(depth)
+            stacked = v2.Resize((self.side_pixels, self.side_pixels),
+                        antialias=True)(stacked)
+        
+        img, depth = stacked[:3], stacked[3:4]
 
         return depth, img
-        
