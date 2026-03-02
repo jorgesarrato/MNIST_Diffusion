@@ -293,12 +293,14 @@ class UNet_FM(nn.Module):
 
             self.downs.append(layers)
 
-        self.mid_res = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group=n_channels_group) if use_residuals else nn.Identity()
+        self.mid_res1 = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group=n_channels_group) if use_residuals else nn.Identity()
         
         if cross_attn:
             self.mid_attn = ResidualCrossAttentionBlock(filters_arr[-1], encoder_filters_arr[-1], n_channels_group)
         else:
             self.mid_attn = ResidualAttentionBlock(filters_arr[-1], n_channels_group) if attn else nn.Identity()
+            
+        self.mid_res2 = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group=n_channels_group) if use_residuals else nn.Identity()
 
         self.ups = nn.ModuleList()
         for i in range(len(filters_arr)-1, 0, -1):
@@ -331,6 +333,7 @@ class UNet_FM(nn.Module):
                     nn.init.zeros_(m.weight)
                     nn.init.zeros_(m.bias)
 
+    @torch.amp.autocast('cuda')
     def forward(self, x, t, y):
         t_sinusoidal = sinusoidal_embedding(t, self.time_mlp[0].in_features)
         t_emb = self.time_mlp(t_sinusoidal)
@@ -355,12 +358,14 @@ class UNet_FM(nn.Module):
                 skips.append(x) 
                 x = down['downsample'](x)
 
-        x = self.mid_res(x, combined_emb)
+        x = self.mid_res1(x, combined_emb)
         
         if self.use_cross:
             x = self.mid_attn(x, sp_feat)
         else:
             x = self.mid_attn(x)
+            
+        x = self.mid_res2(x, combined_emb)
 
         for up in self.ups:
             x = up['upsample'](x)

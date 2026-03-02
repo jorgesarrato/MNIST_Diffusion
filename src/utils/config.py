@@ -46,7 +46,7 @@ class Config:
             "scheduler_factor": 0.5,
             "patience": 30,
             "threshold": 0.005,
-            "loss": "L1",
+            "loss": "L1_Grad",
             "weight_type": "none",
             "time_sampling": "logit_normal",
             "backbone_lr_ratio": 0.1,

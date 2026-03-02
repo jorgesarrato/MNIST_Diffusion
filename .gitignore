@@ -3,6 +3,7 @@ mnist_env
 mlflow.db
 mlruns*
 model_final.pth
+model_best.pth
 *.err
 *.out
 flow*.gif

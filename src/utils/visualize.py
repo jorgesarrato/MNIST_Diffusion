@@ -237,9 +237,6 @@ def visualize_depth_evolution_step(snapshot, downsample_factor=4, axes=None):
         # Process the condition (Now handles 1 or 3 channels)
         cond_img = process_image_for_plot(condition)
         
-        # Denormalize from [-1, 1] to [0, 1]
-        cond_img = (cond_img + 1) / 2
-        
         # Check if it is grayscale (2D) or RGB (3D)
         if cond_img.ndim == 2:
             ax[0].imshow(cond_img, cmap='viridis') # Use 'gray' or 'viridis' for depth
