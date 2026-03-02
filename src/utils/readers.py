@@ -13,20 +13,14 @@ def load_mnist_labels(filename):
         labels = np.fromfile(f, dtype=np.uint8)
     return labels
 
-def load_nyu_labeled_subset(filename, n_read = -1):
-    with h5py.File(filename, 'r') as f:        
-
-        img = f['images']
-        depth = f['depths']
-
-        if n_read < 0:
-            n_read = len(img)
-        
-        img = np.transpose(img, (0, 1, 3, 2))
-        
-        depth = np.transpose(depth, (0, 2, 1))
-        
-    return img[:n_read], depth[:n_read]
+def load_nyu_labeled_subset(filename, n_read=-1):
+    with h5py.File(filename, 'r') as f:
+        n = f['images'].shape[0] if n_read < 0 else n_read
+        img   = f['images'][:n]
+        depth = f['depths'][:n]
+    img   = np.transpose(img,   (0, 1, 3, 2))
+    depth = np.transpose(depth, (0, 2, 1))
+    return img, depth
 
 if __name__ == '__main__':
     from config import Config

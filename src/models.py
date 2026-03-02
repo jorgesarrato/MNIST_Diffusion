@@ -59,7 +59,6 @@ class ResNet_Encoder(nn.Module):
 
     def forward(self, x):
         if x.shape[1] == 3:
-            x = (x + 1.0) / 2.0
             x = (x - self.mean) / self.std
         feat = self.backbone(x)
         feat = self.spatial_proj(feat)
@@ -90,21 +89,20 @@ class ResidualBlock(nn.Module):
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
 
+    def _impl(self, x, emb):
+        h = self.conv1(self.act(self.gn1(x)))
+        if emb is not None:
+            gamma, beta = torch.chunk(
+                self.t_proj(self.act(emb))[:, :, None, None], 2, dim=1)
+            h = h * (1 + gamma) + beta
+        h = self.conv2(self.act(self.gn2(h)))
+        return h + x
 
     def forward(self, x, emb=None):
-        x_in = x
-        
-        x = self.conv1(self.act_gelu(self.gn1(x)))
-
-        if emb is not None:
-            emb_out = self.t_proj(self.act_gelu(emb))[:, :, None, None]
-            gamma, beta = torch.chunk(emb_out, 2, dim=1)
-            
-            x = x * (1 + gamma) + beta
-        
-        x = self.conv2(self.act_gelu(self.gn2(x)))
-        
-        return x + x_in
+        if self.training:
+            from torch.utils.checkpoint import checkpoint
+            return checkpoint(self._impl, x, emb, use_reentrant=False)
+        return self._impl(x, emb)
     
 class Image_Encoder(nn.Module):
     def __init__(self, filters_arr, denses_arr, label_emb_size, in_channels=3, 

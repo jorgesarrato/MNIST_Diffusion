@@ -10,6 +10,7 @@ from utils.config import Config
 from utils.readers import load_mnist_images, load_mnist_labels, load_nyu_labeled_subset
 from utils.model_parser import get_model
 from utils.opt_parser import get_optimizer
+from utils.scheduler_parser import get_scheduler
 from utils.datasets import mnist_dataset, nyu_depth_dataset
 from utils.visualize import create_flow_animation, create_depth_flow_animation
 from train_FM import train, evaluate
@@ -45,12 +46,12 @@ def run():
 
 
 
-    train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True, num_workers=Config.data_config['num_workers'],
-                              num_workers=6, pin_memory=True, persistent_workers=True, prefetch_factor=2, drop_last=True)
+    train_loader = DataLoader(train_dataset, batch_size=Config.data_config['batch_size'], shuffle=True, num_workers=Config.data_config['num_workers_train'],
+                              pin_memory=True, persistent_workers=True, prefetch_factor=2, drop_last=True)
     val_loader   = DataLoader(val_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'],
-                              shuffle=False, num_workers=2, pin_memory=True)
+                              shuffle=False, pin_memory=True)
     test_loader  = DataLoader(test_dataset, batch_size=Config.data_config['batch_size'], num_workers=Config.data_config['num_workers'],
-                              shuffle=False, num_workers=2, pin_memory=True)
+                              shuffle=False, pin_memory=True)
 
     model = get_model(Config.model_config)
     n_gpus = torch.cuda.device_count()
@@ -59,10 +60,10 @@ def run():
         model = nn.DataParallel(model)
     model.to(device)
     optimizer = get_optimizer(model, Config.training_config)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        factor=Config.training_config['scheduler_factor'], 
-        patience=Config.training_config['patience']
+    scheduler = get_scheduler(
+    optimizer,
+    Config.training_config,
+    steps_per_epoch=len(train_loader)   # required for OneCycleLR
     )
 
     mlflow.set_tracking_uri("file://" + Config.MLFLOW_DIR)
@@ -86,7 +87,8 @@ def run():
             device=device,
             loss_fn_str=Config.training_config['loss'],
             weight_type=Config.training_config['weight_type'],
-            side_pixels=Config.data_config['side_pixels']
+            side_pixels=Config.data_config['side_pixels'],
+            patience=Config.training_config['patience']
         )
         test_loss = evaluate(model, test_loader, device)
         print(f"Test Loss: {test_loss:.6f}")
@@ -99,14 +101,14 @@ def run():
         x_base = torch.randn(1, 1, Config.data_config['side_pixels'], Config.data_config['side_pixels']).to(device)
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii][1], device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii][1]/255, device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_{ii}.pt")
             mlflow.log_artifact(f"snapshots_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
             #create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset_noaug[ii][1], device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset_noaug[ii][1]/255, device=device, num_steps=1000)
             torch.save(snapshots, f"snapshots_train_{ii}.pt")
             mlflow.log_artifact(f"snapshots_train_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_train_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')

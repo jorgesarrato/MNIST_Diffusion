@@ -16,7 +16,8 @@ class Config:
     data_config = {
             "data_dir": DATA_DIR,
             "batch_size": 16,
-            "num_workers": 1,
+            "num_workers": 2,
+            "num_workers_train": 6,
             "val_split": 0.1,
             "side_pixels": 128
         }
@@ -41,10 +42,9 @@ class Config:
             "lr": 2e-4,
             "epochs": 500,
             "optimizer": "AdamW",
-            "weight_decay": 0.05,
+            "weight_decay": 0.03,
             "scheduler_factor": 0.5,
-            "patience": 5,
-            "min_lr": 5e-6,
+            "patience": 25,
             "threshold": 0.005,
             "loss": "L1_Grad",
             "weight_type": "quad",

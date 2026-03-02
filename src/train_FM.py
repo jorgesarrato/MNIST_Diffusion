@@ -62,7 +62,7 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
         for x, y in dataloader_val:
             x = x.to(device)
             y = y.to(device)
-            y = (y / 255.0) * 2.0 - 1.0
+            y = (y / 255.0)
 
             x0 = torch.randn_like(x)
             t = torch.rand(size=(x.shape[0],), device=device)
@@ -82,7 +82,7 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
     return total_loss_val/len(dataloader_val)
 
 def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str='L1_Grad', dataloader_val=None,
-          overfit_x0=None, weight_type='quad', side_pixels=128):
+          overfit_x0=None, weight_type='quad', side_pixels=128, patience = 5):
     
     _GPU_SPATIAL = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
@@ -107,6 +107,9 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
     ))
     is_plateau_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
 
+    best_val   = float('inf')
+    no_improve = 0
+
     for epoch in range(epochs):
         model.train()
         total_loss = 0
@@ -114,12 +117,12 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
         for x, y in dataloader_train:
             x = x.to(device)
             y = y.to(device)
-            y = (y / 255.0) * 2.0 - 1.0
 
             stacked = torch.cat([y, x], dim=1)
             stacked = _GPU_SPATIAL(stacked)
             y, x = stacked[:, :3], stacked[:, 3:4]
             y = _GPU_COLOR(y)
+            y = (y / 255.0)
 
             optimizer.zero_grad(set_to_none=True)
             
@@ -164,6 +167,19 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 mlflow.log_metric("val_loss", avg_loss_val, step=epoch)
 
             print(f'Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}, Val_Loss: {avg_loss_val:.6f}, LR: {current_lr:.6f}')
+
+            if avg_loss_val < best_val:
+                best_val = avg_loss_val
+                no_improve = 0
+                m = model.module if hasattr(model, 'module') else model
+                torch.save(m.state_dict(), "model_best.pth")
+                if mlflow.active_run():
+                    mlflow.log_metric("best_val_loss", best_val, step=epoch)
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping at epoch {epoch+1}", flush=True)
+                    break
             
             if scheduler is not None and not is_batch_scheduler:
                 if is_plateau_scheduler:
