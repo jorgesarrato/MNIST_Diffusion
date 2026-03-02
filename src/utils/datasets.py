@@ -17,24 +17,32 @@ class mnist_dataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx]
 
 class nyu_depth_dataset(torch.utils.data.Dataset):
-    def __init__(self, x, y, train=True, side_pixels=128):
+    def __init__(self, x, y, train=True, side_pixels=128, depth_min = None, depth_max = None):
         self.images = x.astype(np.float32)
         self.depths = y.astype(np.float32)
         self.side_pixels = side_pixels
         self.train = train
+
+        mask = self.depths > 0.01
+
+        if depth_min is None or depth_max is None:
+            mask = self.depths > 0.01
+            self.depth_min = float(self.depths[mask].min())
+            self.depth_max = float(self.depths[mask].max())
+        else:
+            self.depth_min = depth_min
+            self.depth_max = depth_max
 
     def __len__(self):
         return self.images.shape[0]
 
     def __getitem__(self, idx):
         img = torch.from_numpy(self.images[idx])
-        depth = torch.from_numpy(self.depths[idx]).unsqueeze(0)/10
+        depth = torch.from_numpy(self.depths[idx]).unsqueeze(0)
 
-        mask = depth > 0.1
-        if mask.any():
-            d_min, d_max = depth[mask].min(), depth[mask].max()
-            depth = torch.clamp(depth, d_min, d_max)
-            depth = (depth - d_min) / (d_max - d_min + 1e-8) # to [0, 1]
+
+        depth = torch.clamp(depth, self.depth_min, self.depth_max)
+        depth = (depth - self.depth_min) / (self.depth_max - self.depth_min)
 
         depth = (depth * 2.0) - 1.0 # to [-1, 1]
 
