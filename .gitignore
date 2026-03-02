@@ -10,6 +10,7 @@ model_best.pth
 flow*.gif
 *.pt
 *.png
+*simple.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
