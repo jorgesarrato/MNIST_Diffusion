@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 from torchvision import models
+import math
 
 class ResNet_Encoder(nn.Module):
     def __init__(self, target_spatial_ch, label_emb_size, num_unet_downs, condition_ch = 3, denses_arr=None, return_spatial=True):
@@ -15,12 +16,10 @@ class ResNet_Encoder(nn.Module):
         
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
-
         if condition_ch == 1:
             resnet.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False, padding_mode = 'reflect')
             with torch.no_grad():
                 resnet.conv1.weight[:] = resnet.conv1.weight.mean(dim=1, keepdim=True)
-
 
         children = list(resnet.children())
         
@@ -48,14 +47,13 @@ class ResNet_Encoder(nn.Module):
         self.spatial_proj = nn.Conv2d(resnet_ch, target_spatial_ch, kernel_size=1)
         self.norm = nn.GroupNorm(8, target_spatial_ch)
         
-        if not return_spatial:
-            self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
-            self.flatten = nn.Flatten()
-            self.fc = nn.Sequential(
-                nn.Linear(target_spatial_ch * 16, denses_arr[-1] if denses_arr else 512),
-                nn.GELU(),
-                nn.Linear(denses_arr[-1] if denses_arr else 512, label_emb_size)
-            )
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
+        self.flatten = nn.Flatten()
+        self.fc = nn.Sequential(
+            nn.Linear(target_spatial_ch * 16, denses_arr[-1] if denses_arr else 512),
+            nn.GELU(),
+            nn.Linear(denses_arr[-1] if denses_arr else 512, label_emb_size)
+        )
 
     def forward(self, x):
         if x.shape[1] == 3:
@@ -63,12 +61,10 @@ class ResNet_Encoder(nn.Module):
         feat = self.backbone(x)
         feat = self.spatial_proj(feat)
         feat = self.norm(feat)
-        
-        if self.return_spatial:
-            return feat
             
-        feat = self.adaptive_pool(feat)
-        return self.fc(self.flatten(feat))
+        global_feat = self.adaptive_pool(feat)
+        global_feat = self.fc(self.flatten(global_feat))
+        return feat, global_feat
 
 class ResidualBlock(nn.Module):
     def __init__(self, ch, emb_dim, n_channels_group=8):
@@ -90,25 +86,24 @@ class ResidualBlock(nn.Module):
         nn.init.zeros_(self.conv2.bias)
 
     def _impl(self, x, emb):
-        h = self.conv1(self.act(self.gn1(x)))
+        h = self.conv1(self.act_gelu(self.gn1(x)))
         if emb is not None:
             gamma, beta = torch.chunk(
-                self.t_proj(self.act(emb))[:, :, None, None], 2, dim=1)
+                self.t_proj(self.act_gelu(emb))[:, :, None, None], 2, dim=1)
             h = h * (1 + gamma) + beta
-        h = self.conv2(self.act(self.gn2(h)))
+        h = self.conv2(self.act_gelu(self.gn2(h)))
         return h + x
 
     def forward(self, x, emb=None):
-        if self.training:
+        """if self.training:
             from torch.utils.checkpoint import checkpoint
-            return checkpoint(self._impl, x, emb, use_reentrant=False)
+            return checkpoint(self._impl, x, emb, use_reentrant=False)"""
         return self._impl(x, emb)
     
 class Image_Encoder(nn.Module):
     def __init__(self, filters_arr, denses_arr, label_emb_size, in_channels=3, 
-                 n_channels_group=8, side_pixels=128, return_spatial=False):
+                 n_channels_group=8, side_pixels=128):
         super().__init__()
-        self.return_spatial = return_spatial
         self.downs = nn.ModuleList()
         
         for i in range(len(filters_arr)):
@@ -122,29 +117,27 @@ class Image_Encoder(nn.Module):
             
         self.act_gelu = nn.GELU()
 
-        if self.return_spatial:
-            self.final_norm = nn.GroupNorm(n_channels_group, filters_arr[-1])
-        else:
-            resulting_side_pixels = side_pixels // (2 ** len(filters_arr))
-            self.flatten = nn.Flatten()
-            self.linears = nn.ModuleList()
-            for i in range(len(denses_arr)):
-                in_dim = filters_arr[-1] * (resulting_side_pixels**2) if i == 0 else denses_arr[i-1]
-                self.linears.append(nn.Linear(in_dim, denses_arr[i]))
-            self.last = nn.Linear(denses_arr[-1], label_emb_size)
+        self.final_norm = nn.GroupNorm(n_channels_group, filters_arr[-1])
+
+        resulting_side_pixels = side_pixels // (2 ** len(filters_arr))
+        self.flatten = nn.Flatten()
+        self.linears = nn.ModuleList()
+        for i in range(len(denses_arr)):
+            in_dim = filters_arr[-1] * (resulting_side_pixels**2) if i == 0 else denses_arr[i-1]
+            self.linears.append(nn.Linear(in_dim, denses_arr[i]))
+        self.last = nn.Linear(denses_arr[-1], label_emb_size)
 
     def forward(self, x):
         for down in self.downs:
             x = down['conv'](x)
             x = down['residual'](x)
         
-        if self.return_spatial:
-            return self.act_gelu(self.final_norm(x))
+        feat = self.act_gelu(self.final_norm(x))
         
-        x = self.flatten(x)
+        global_feat = self.flatten(x)
         for linear in self.linears:
-            x = self.act_gelu(linear(x))
-        return self.last(x)
+            global_feat = self.act_gelu(linear(global_feat))
+        return feat, global_feat
 
 
 
@@ -180,6 +173,13 @@ class ResidualAttentionBlock(nn.Module):
 
         return self.final(attn) + x
     
+def sinusoidal_embedding(t, dim):
+    half_dim = dim // 2
+    emb = math.log(10000) / (half_dim - 1)
+    emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+    emb = t[:, None] * emb[None, :]
+    return torch.cat((emb.sin(), emb.cos()), dim=-1)
+
 def get_2d_sincos_pos_embed(embed_dim, h, w, device):
 
     assert embed_dim % 4 == 0, "Embedding dimension must be divisible by 4 for 2D sin-cos pos embedding"
@@ -271,7 +271,7 @@ class UNet_FM(nn.Module):
         input_dim = (in_channels + in_channels_cond) if self.cond_type == "concat" else in_channels
 
         self.time_mlp = nn.Sequential(
-            nn.Linear(1, t_emb_size),
+            nn.Linear(t_emb_size, t_emb_size),
             nn.GELU(),
             nn.Linear(t_emb_size, t_emb_size)
         )
@@ -332,14 +332,10 @@ class UNet_FM(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, x, t, y):
-        t_emb = self.time_mlp(t.view(-1, 1))
-        y_feat = self.label_emb(y)
+        t_sinusoidal = sinusoidal_embedding(t, self.time_mlp[0].in_features)
+        t_emb = self.time_mlp(t_sinusoidal)
         
-        if self.use_cross:
-            y_global = y_feat.mean(dim=[2, 3]) 
-            y_global = self.global_proj(y_global) 
-        else:
-            y_global = y_feat
+        sp_feat, y_global = self.label_emb(y)
 
         if self.cond_type == "concat":
             x = torch.cat([x, y], dim=1)
@@ -362,7 +358,7 @@ class UNet_FM(nn.Module):
         x = self.mid_res(x, combined_emb)
         
         if self.use_cross:
-            x = self.mid_attn(x, y_feat)
+            x = self.mid_attn(x, sp_feat)
         else:
             x = self.mid_attn(x)
 
@@ -376,7 +372,7 @@ class UNet_FM(nn.Module):
             x = up['convskip'](torch.cat([x, skip], dim=1))
 
             if self.use_cross:
-                x = up['cross_attn'](x, y_feat)
+                x = up['cross_attn'](x, sp_feat)
 
             if self.use_residuals:
                 x = up['residual'](x, combined_emb)
