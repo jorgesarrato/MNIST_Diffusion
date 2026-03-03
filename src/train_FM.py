@@ -2,6 +2,19 @@ import torch
 import torch.nn as nn
 import mlflow
 from torchvision.transforms import v2
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
+
+def sync_ema_buffers(base_model, ema_model):
+    trained_base = base_model.module if isinstance(base_model, nn.DataParallel) else base_model
+    if hasattr(ema_model, 'module') and isinstance(ema_model.module, nn.DataParallel):
+        ema_base = ema_model.module.module
+    elif hasattr(ema_model, 'module'):
+        ema_base = ema_model.module
+    else:
+        ema_base = ema_model
+        
+    for ema_buf, train_buf in zip(ema_base.buffers(), trained_base.buffers()):
+        ema_buf.data.copy_(train_buf.data)
 
 def get_loss_weights(t, weight_type="quad", min_weight=0.1):
     if weight_type == "quad":
@@ -55,10 +68,15 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
     model.eval()
     total_loss_val = 0
 
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+
     with torch.no_grad():
         for x, y in dataloader_val:
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
+
+            y = (y - imagenet_mean) / imagenet_std
 
             x0 = torch.randn_like(x)
             if time_sampling == "logit_normal":
@@ -83,8 +101,11 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
 
 
 def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str='L1_Grad', dataloader_val=None,
-          overfit_x0=None, weight_type='quad', side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10):
+          overfit_x0=None, weight_type='quad', side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10, ema_decay=0.999):
     
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+
     _GPU_SPATIAL = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
         v2.RandomResizedCrop(size=(side_pixels, side_pixels), scale=(0.75, 1.0), antialias=True),
@@ -95,7 +116,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
         raise ValueError(f"Loss function {loss_fn_str} not supported.")
 
     loss_fn = LOSS_MAP[loss_fn_str]
-    model.to(device)
+    ema_avg_fn = get_ema_multi_avg_fn(ema_decay)
+    ema_model = AveragedModel(model, multi_avg_fn=ema_avg_fn).to(device)
 
     use_cuda = 'cuda' in str(device)
     device_type = 'cuda' if use_cuda else 'cpu'
@@ -123,6 +145,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
             stacked = _GPU_SPATIAL(stacked)
             y, x = stacked[:, :3], stacked[:, 3:4]
             y = _GPU_COLOR(y)
+
+            y = (y - imagenet_mean) / imagenet_std
 
             optimizer.zero_grad(set_to_none=True)
             
@@ -153,6 +177,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
 
             scaler.step(optimizer)
             scaler.update()
+
+            ema_model.update_parameters(model)
             
             if scheduler is not None and is_batch_scheduler:
                 scheduler.step()
@@ -167,7 +193,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
             mlflow.log_metric("learning_rate", current_lr, step=epoch)
 
         if dataloader_val is not None and (epoch % eval_freq == 0 or epoch == 1):
-            avg_loss_val = evaluate(model, dataloader_val, device, loss_fn_str, weight_type, time_sampling)
+            sync_ema_buffers(model, ema_model)
+            avg_loss_val = evaluate(ema_model, dataloader_val, device, loss_fn_str, weight_type, time_sampling)
 
             if mlflow.active_run():
                 mlflow.log_metric("val_loss", avg_loss_val, step=epoch)
@@ -177,7 +204,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 no_improve = 0
                 print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val: {avg_loss_val:.4f} | LR: {current_lr:.6f} *** NEW BEST! ***', flush=True)
                 
-                m = model.module if hasattr(model, 'module') else model
+                m = ema_model.module.module if hasattr(ema_model.module, 'module') else ema_model.module
                 torch.save(m.state_dict(), "model_best.pth")
                 if mlflow.active_run():
                     mlflow.log_metric("best_val_loss", best_val, step=epoch)

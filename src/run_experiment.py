@@ -84,7 +84,8 @@ def run():
             weight_type=Config.training_config['weight_type'],
             time_sampling=Config.training_config.get('time_sampling', 'uniform'),
             side_pixels=Config.data_config['side_pixels'],
-            patience=Config.training_config['patience']
+            patience=Config.training_config['patience'],
+            ema_decay=Config.training_config.get('ema_decay', 0.999)
         )
         test_loss = evaluate(model, test_loader, device, Config.training_config['loss'], Config.training_config['weight_type'], Config.training_config.get('time_sampling', 'uniform'))
         print(f"Test Loss: {test_loss:.6f}")
