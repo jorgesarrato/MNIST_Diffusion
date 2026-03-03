@@ -24,7 +24,7 @@ class Config:
     model_config = {
             "type": "UNet_FM",
             "filters_arr": [64, 128, 256, 512],
-            "encoder_filters_arr": [64, 128, 256],
+            "encoder_filters_arr": [64, 128, 256, 512],
             "encoder_denses_arr": [],
             "t_emb_size": 256,
             "label_emb_size": 512,
