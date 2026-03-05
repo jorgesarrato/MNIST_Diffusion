@@ -17,7 +17,7 @@ class Config:
             "data_dir": DATA_DIR,
             "batch_size": 32,
             "num_workers": 2,
-            "num_workers_train": 4,
+            "num_workers_train": 2,
             "val_split": 0.1,
             "side_pixels": 128
         }
@@ -26,8 +26,9 @@ class Config:
             "filters_arr": [64, 128, 256, 512],
             "encoder_filters_arr": [64, 128, 256, 512],
             "encoder_denses_arr": [],
-            "t_emb_size": 256,
-            "label_emb_size": 512,
+            "t_emb_size": 512,
+            #"shared_emb_dim": 512,
+            "label_emb_size": 1024,
             "side_pixels": 128,
             "in_channels": 1,
             "in_channels_cond": 3,
@@ -37,7 +38,7 @@ class Config:
             "use_residuals": True,
             "cond_type": "simple",
             "encoder_type": "resnet"
-        }
+            }
     training_config = {
             "lr": 2e-4,
             "epochs": 600,
@@ -55,5 +56,7 @@ class Config:
             "final_div_factor": 10.0,
             "div_factor": 25.0,
             "ema_decay": 0.999,
+            "cond_drop_prob": 0.20,
+            "guidance_scale": 1.5,
             }
 

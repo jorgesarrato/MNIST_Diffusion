@@ -45,10 +45,13 @@ class ResNet_Encoder(nn.Module):
                 nn.Linear(denses_arr[-1], label_emb_size)
             )
 
-    def forward(self, x):
+    def forward(self, x, drop_mask=None):
         feat = self.backbone(x)
         feat = self.spatial_proj(feat)
         feat = self.norm(feat)
+
+        if drop_mask is not None:
+            feat[drop_mask] = 0.0
             
         global_feat = self.adaptive_pool(feat)
         global_feat = self.fc(self.flatten(global_feat))
@@ -133,12 +136,15 @@ class Image_Encoder(nn.Module):
             self.linears.append(nn.Linear(in_dim, denses_arr[i]))
         self.last = nn.Linear(denses_arr[-1], label_emb_size)
 
-    def forward(self, x):
+    def forward(self, x, drop_mask=None):
         for down in self.downs:
             x = down['conv'](x)
             x = down['residual'](x)
         
         feat = self.act_gelu(self.final_norm(x))
+
+        if drop_mask is not None:
+            feat[drop_mask] = 0.0
         
         global_feat = self.flatten(x)
         for linear in self.linears:
@@ -330,11 +336,11 @@ class UNet_FM(nn.Module):
                     nn.init.zeros_(m.bias)
 
     @torch.amp.autocast('cuda')
-    def forward(self, x, t, y):
+    def forward(self, x, t, y, drop_mask=None):
         t_sinusoidal = sinusoidal_embedding(t, self.time_mlp[0].in_features)
         t_emb = self.time_mlp(t_sinusoidal)
         
-        sp_feat, y_global = self.label_emb(y)
+        sp_feat, y_global = self.label_emb(y, drop_mask=drop_mask)
 
         if self.cond_type == "concat":
             x = torch.cat([x, y], dim=1)

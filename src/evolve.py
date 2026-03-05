@@ -1,6 +1,6 @@
 import torch
 
-def save_flow_evolution(model, x=None, label=None, device='cpu', num_steps=50, side_pixels=128):
+def save_flow_evolution(model, x=None, label=None, device='cpu', num_steps=50, side_pixels=128, guidance_scale=1.5):
     m = model.module if hasattr(model, 'module') else model
     m.eval()
 
@@ -28,13 +28,19 @@ def save_flow_evolution(model, x=None, label=None, device='cpu', num_steps=50, s
         with torch.amp.autocast('cuda'):
             if label_tensor is not None:
                 label_tensor = (label_tensor - imagenet_mean) / imagenet_std
-                v = m(x_curr, t_tensor, label_tensor)
+                
+                if guidance_scale > 1.0:
+                    mask_keep = torch.zeros(B, dtype=torch.bool, device=device)
+                    mask_drop = torch.ones(B, dtype=torch.bool, device=device)
+                    
+                    v_cond = m(x_curr, t_tensor, label_tensor, drop_mask=mask_keep)
+                    v_uncond = m(x_curr, t_tensor, label_tensor, drop_mask=mask_drop)
+                    
+                    v = v_uncond + guidance_scale * (v_cond - v_uncond)
+                else:
+                    v = m(x_curr, t_tensor, label_tensor)
             else:
                 v = m(x_curr, t_tensor)
-        
-        x1_pred = torch.clamp(x_curr + (1 - t_val) * v, -1.0, 1.0)
-        if t_val < 1.0:
-            v = (x1_pred - x_curr) / (1 - t_val)
             
         return v
 

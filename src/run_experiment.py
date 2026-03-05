@@ -85,7 +85,8 @@ def run():
             time_sampling=Config.training_config.get('time_sampling', 'uniform'),
             side_pixels=Config.data_config['side_pixels'],
             patience=Config.training_config['patience'],
-            ema_decay=Config.training_config.get('ema_decay', 0.999)
+            ema_decay=Config.training_config.get('ema_decay', 0.999),
+            cond_drop_prob=Config.training_config.get('cond_drop_prob', 0.20)
         )
         test_loss = evaluate(model, test_loader, device, Config.training_config['loss'], Config.training_config['weight_type'], Config.training_config.get('time_sampling', 'uniform'))
         print(f"Test Loss: {test_loss:.6f}")
@@ -98,14 +99,14 @@ def run():
         x_base = torch.randn(1, 1, Config.data_config['side_pixels'], Config.data_config['side_pixels']).to(device)
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii][1], device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=test_dataset[ii][1], device=device, num_steps=1000, guidance_scale=Config.training_config.get('guidance_scale', 1.5))
             torch.save(snapshots, f"snapshots_{ii}.pt")
             mlflow.log_artifact(f"snapshots_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic', gt_depth=test_dataset[ii][0])
             #create_flow_animation(snapshots, filename = f"flow_evolution_log_{ii}.gif", n_steps=100, timing_mode='logarithmic')
 
         for ii in range(5):
-            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset[ii][1], device=device, num_steps=1000)
+            snapshots = save_flow_evolution(model, x=x_base, label=train_dataset[ii][1], device=device, num_steps=1000, guidance_scale=Config.training_config.get('guidance_scale', 1.5))
             torch.save(snapshots, f"snapshots_train_{ii}.pt")
             mlflow.log_artifact(f"snapshots_train_{ii}.pt")
             create_depth_flow_animation(snapshots, filename = f"flow_evolution_train_log_{ii}.gif", n_steps=100, timing_mode='logarithmic', gt_depth=train_dataset[ii][0])

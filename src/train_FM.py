@@ -101,7 +101,7 @@ def evaluate(model, dataloader_val, device='cpu', loss_fn_str='L1', weight_type=
 
 
 def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', loss_fn_str='L1_Grad', dataloader_val=None,
-          overfit_x0=None, weight_type='quad', side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10, ema_decay=0.999):
+          overfit_x0=None, weight_type='quad', side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10, ema_decay=0.999, cond_drop_prob=0.20):
     
     imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
     imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
@@ -164,7 +164,9 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', l
                 xt = t[:, None, None, None] * x + (1 - t[:, None, None, None]) * x0
                 v = x - x0
 
-                v_pred = model(xt, t, y).view_as(v)
+                drop_mask = torch.rand(x.shape[0], device=device) < cond_drop_prob
+                v_pred = model(xt, t, y, drop_mask=drop_mask).view_as(v)
+
                 x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
                 
                 per_sample_loss = loss_fn(v_pred, v, x1_pred, x)

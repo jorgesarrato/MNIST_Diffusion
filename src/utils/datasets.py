@@ -48,5 +48,4 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
         return len(self.images_cache)
     
     def __getitem__(self, idx):
-        # Now getitem is instantaneous!
         return self.depths_cache[idx], self.images_cache[idx]
