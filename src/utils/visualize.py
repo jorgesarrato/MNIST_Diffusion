@@ -4,8 +4,6 @@ import numpy as np
 import mlflow
 import torch
 
-# MNIST Visualization
-
 def visualize_flow_step(snapshot, downsample_factor=4, axes=None):
     if axes is None:
         fig, ax = plt.subplots()
@@ -142,16 +140,22 @@ def create_multi_model_flow_animation(model_snapshots_dict, model_labels = None,
     print(f"Grid animation saved to {filename}")
     return filename
 
-# NYU-Depth Visualization
 
 def process_rgb_for_plot(img_tensor):
     if isinstance(img_tensor, torch.Tensor):
         img = img_tensor.detach().cpu()
         if img.ndim == 4:
             img = img.squeeze(0)
+            
+        """mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        
+        img = img * std + mean"""
+        
         if img.shape[0] == 3:
             img = img.permute(1, 2, 0)
         img = img.numpy()
+        
     return img
 
 def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_factor=4, axes=None, cax=None, fig=None):

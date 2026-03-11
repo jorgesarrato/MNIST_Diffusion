@@ -11,6 +11,8 @@ flow*.gif
 *.pt
 *.png
 *simple.py
+*.zip
+*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

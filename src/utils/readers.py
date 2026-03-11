@@ -1,6 +1,10 @@
 import numpy as np
 import struct
 import h5py
+from PIL import Image
+import os
+import tqdm
+import json
 
 def load_mnist_images(filename):
     with open(filename, 'rb') as f:
@@ -21,6 +25,62 @@ def load_nyu_labeled_subset(filename, n_read=-1):
     img   = np.transpose(img,   (0, 1, 3, 2))
     depth = np.transpose(depth, (0, 2, 1))
     return img, depth
+
+import os
+
+def fast_scantree(path):
+    """Recursively yield DirEntry objects for given directory."""
+    for entry in os.scandir(path):
+        if entry.is_dir(follow_symlinks=False):
+            yield from fast_scantree(entry.path)
+        else:
+            yield entry
+
+def load_sun_rgbd_fast(base_dir, depth_type="depth_bfx"): 
+    rgb_paths = []
+    depth_paths = []
+    
+    for entry in fast_scantree(base_dir):
+        if entry.name.endswith(".jpg") and "/image/" in entry.path:
+            rgb_paths.append(entry.path)
+            
+        elif entry.name.endswith(".png") and f"/{depth_type}/" in entry.path:
+            depth_paths.append(entry.path)
+            
+    return sorted(rgb_paths), sorted(depth_paths)
+
+def load_sun_rgbd_subset(base_dir, n_read=-1):
+
+    if not os.path.exists("dataset_manifest.json"):
+        rgb, depth = load_sun_rgbd_fast(base_dir)
+        with open("dataset_manifest.json", "w") as f:
+            json.dump({"rgb": rgb, "depth": depth}, f)
+
+    with open("dataset_manifest.json", "r") as f:
+        data = json.load(f)
+        rgb_paths, depth_paths = data["rgb"], data["depth"]
+        
+    if n_read > 0:
+        rgb_paths = rgb_paths[:n_read]
+        depth_paths = depth_paths[:n_read]
+        
+    images = []
+    depths = []
+    
+    for r_path, d_path in tqdm.tqdm(zip(rgb_paths, depth_paths)):
+        img = Image.open(r_path).convert('RGB')
+        depth = Image.open(d_path)
+        
+        depth_np = np.array(depth).astype(np.uint16)
+        depth_corrected = (depth_np >> 3) | (depth_np << 13)
+        depth_corrected = depth_corrected.astype(np.float32) / 1000.0
+        depth_corrected[depth_corrected > 10.0] = 0.0
+        
+        images.append(np.array(img))
+        depths.append(depth_corrected)
+
+    return images, depths
+
 
 if __name__ == '__main__':
     from config import Config
