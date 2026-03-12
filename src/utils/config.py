@@ -21,15 +21,15 @@ class Config:
             "num_workers_train": 2,
             "val_split": 0.1,
             "side_pixels": 128,
-            "cache_size": 128
+            "cache_size": 256
         }
     model_config = {
             "type": "UNet_FM",
-            "filters_arr": [32, 64, 128, 256],
-            "encoder_filters_arr": [32, 64, 128, 256],
+            "filters_arr": [16, 32, 64, 128, 256],
+            "encoder_filters_arr": [16, 32, 64, 128, 256],
             "encoder_denses_arr": [],
-            "t_emb_size": 512,
-            "label_emb_size": 1024,
+            "t_emb_size": 2048,
+            "label_emb_size": 8192,
             "side_pixels": 128,
             "in_channels": 1,
             "in_channels_cond": 3,
@@ -38,7 +38,7 @@ class Config:
             "cross_attn": True,
             "use_residuals": True,
             "cond_type": "simple",
-            "encoder_type": "simple"
+            "encoder_type": "resnet"
             }
     training_config = {
             "lr": 2e-4,
@@ -49,12 +49,12 @@ class Config:
             "patience": 20,
             "threshold": 0.005,
             "loss": "L1",
-            "grad_weight": 0.0,
+            "grad_weight": 0.75,
             "edge_weight": 0.0,
             "si_weight": 0.0,
             "weight_type": "none",
             "time_sampling": "uniform",
-            "backbone_lr_ratio": 1,
+            "backbone_lr_ratio": 0.5,
             "scheduler": "OneCycleLR",
             "pct_start": 0.10,
             "final_div_factor": 25.0,

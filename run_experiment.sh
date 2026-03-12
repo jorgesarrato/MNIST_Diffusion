@@ -2,7 +2,7 @@
 #############################
 #SBATCH -J FM
 #SBATCH -n 1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=5
 #SBATCH -t 0-24:00:00
 #SBATCH -o %j.out
 #SBATCH -e %j.err

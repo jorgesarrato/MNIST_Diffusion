@@ -4,6 +4,34 @@ A PyTorch implementation of conditional flow matching for monocular depth estima
 
 ---
 
+## Current Results
+
+Next I show depth reconstruction GIFs for 4 random samples from the test set. These correspond to training with a resnet-18 backbone, multi-scale cross-attention
+capped to the bottleneck and smallest upsampling blocks of the Residual U-Net, self-attention at the bottleneck, and a relatively long 500 epoch training run
+using OneCycleLR. Training is done on random 128x128 scaled crops taken from 256x256 scaled-down central patches of the images in the dataset.
+
+For each test sample I show 3 reconstructions using different scales of classifier-free guidance: 1.0 (purely conditioned reconstruction), 1.5 and 2.0.
+First two samples correspond to "easy" images that are reasonably well reconstructed, whilst the two next samples present more challenging rooms full
+of sub-structure that is currently not well recovered.
+
+![sample 0 cfg 1.0](evolution_test_log_0_1.0.gif)
+![sample 0 cfg 1.5](evolution_test_log_0_1.5.gif)
+![sample 0 cfg 2.0](evolution_test_log_0_2.0.gif)
+
+![sample 3 cfg 1.0](evolution_test_log_3_1.0.gif)
+![sample 3 cfg 1.5](evolution_test_log_3_1.5.gif)
+![sample 3 cfg 2.0](evolution_test_log_3_2.0.gif)
+
+![sample 2 cfg 1.0](evolution_test_log_2_1.0.gif)
+![sample 2 cfg 1.5](evolution_test_log_2_1.5.gif)
+![sample 2 cfg 2.0](evolution_test_log_2_2.0.gif)
+
+![sample 4 cfg 1.0](evolution_test_log_4_1.0.gif)
+![sample 4 cfg 1.5](evolution_test_log_4_1.5.gif)
+![sample 4 cfg 2.0](evolution_test_log_4_2.0.gif)
+
+---
+
 ## Repository Structure
 
 ```
