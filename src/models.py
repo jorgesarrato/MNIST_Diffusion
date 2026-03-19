@@ -6,15 +6,30 @@ from torchvision import models
 import math
 import timm
 
+class LayerNorm2d(nn.Module):
+    def __init__(self, ch: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ch))
+        self.bias   = nn.Parameter(torch.zeros(ch))
+        self.eps    = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # F.layer_norm expects the normalised dims at the end → permute to NHWC,
+        # normalise over C, then permute back. The fused kernel avoids the manual
+        # mean/var ops and is safe for fp16/bf16.
+        x = x.permute(0, 2, 3, 1)                          # NCHW → NHWC
+        x = F.layer_norm(x, x.shape[-1:], self.weight, self.bias, self.eps)
+        return x.permute(0, 3, 1, 2).contiguous()          # NHWC → NCHW
+
 class ViT_Encoder(nn.Module):
-    def __init__(self, target_spatial_ch, label_emb_size):
+    def __init__(self, target_spatial_ch, label_emb_size, side_pixels):
         super().__init__()
 
         self.vit = timm.create_model(
-            'vit_small_patch16_224',
+            'vit_small_patch14_dinov2', 
             pretrained=True,
             num_classes=0,
-            img_size=128,
+            img_size=side_pixels
         )
 
         for name, p in self.vit.named_parameters():
@@ -22,17 +37,24 @@ class ViT_Encoder(nn.Module):
                    ['patch_embed', 'blocks.0', 'blocks.1', 'blocks.2', 'blocks.3']):
                 p.requires_grad = False
 
-        vit_dim = target_spatial_ch
+        vit_dim = self.vit.num_features
 
         self.spatial_proj = nn.Sequential(
+            nn.LayerNorm(vit_dim),
             nn.Linear(vit_dim, target_spatial_ch),
             nn.GELU(),
         )
 
         self.global_proj = nn.Sequential(
+            nn.LayerNorm(vit_dim),
             nn.Linear(vit_dim, label_emb_size),
             nn.GELU(),
         )
+
+        self.spatial_norm2d = LayerNorm2d(target_spatial_ch)
+
+        self.null_global = nn.Parameter(torch.randn(label_emb_size))
+        self.null_spatial = nn.Parameter(torch.randn(1, target_spatial_ch, 1, 1))
 
     def forward(self, x, drop_mask=None):
         B = x.shape[0]
@@ -43,16 +65,19 @@ class ViT_Encoder(nn.Module):
         patch_tokens = tokens[:, 1:, :]
 
         h = w = int(patch_tokens.shape[1] ** 0.5)
+        
         sp_feat = self.spatial_proj(patch_tokens)
         sp_feat = sp_feat.permute(0, 2, 1).reshape(B, -1, h, w)
-
-        if drop_mask is not None:
-            sp_feat[drop_mask] = 0.0
+        sp_feat = self.spatial_norm2d(sp_feat)
 
         global_feat = self.global_proj(cls_token)
 
         if drop_mask is not None:
-            global_feat[drop_mask] = 0.0
+            mask_1d = drop_mask.view(B, 1).float()
+            mask_4d = drop_mask.view(B, 1, 1, 1).float()
+
+            global_feat = global_feat * (1.0 - mask_1d) + self.null_global.unsqueeze(0) * mask_1d
+            sp_feat = sp_feat * (1.0 - mask_4d) + self.null_spatial * mask_4d
 
         return sp_feat, global_feat
 
@@ -132,57 +157,33 @@ class ResNet_Encoder(nn.Module):
         return multi_scale_feats, global_feat
 
 class ResidualBlock(nn.Module):
-    def __init__(self, ch, emb_dim, n_channels_group=8):
+    def __init__(self, ch, emb_dim):
         super().__init__()
-        self.gn1 = nn.GroupNorm(n_channels_group, ch)
-        self.conv1 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, )
-
-        if emb_dim > 0:
-            self.t_proj = nn.Linear(emb_dim, ch * 2)
-            nn.init.zeros_(self.t_proj.weight)
-            nn.init.zeros_(self.t_proj.bias)
-
-        self.gn2 = nn.GroupNorm(n_channels_group, ch)
-        self.conv2 = nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, )
+        self.norm1 = LayerNorm2d(ch)
+        self.conv1 = nn.Conv2d(ch, ch, 3, padding=1)
+        self.film = nn.Linear(emb_dim, ch * 2)
+        self.norm2 = LayerNorm2d(ch)
+        self.conv2 = nn.Conv2d(ch, ch, 3, padding=1)
         
-        self.act_gelu = nn.GELU()
-
+        nn.init.zeros_(self.film.weight)
+        nn.init.zeros_(self.film.bias)
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
 
     def _impl(self, x, emb):
-        h = self.conv1(self.act_gelu(self.gn1(x)))
-        if emb is not None:
-            gamma, beta = torch.chunk(
-                self.t_proj(self.act_gelu(emb))[:, :, None, None], 2, dim=1)
-            h = h * (1 + gamma) + beta
-        h = self.conv2(self.act_gelu(self.gn2(h)))
-        return h + x
+        h = self.conv1(F.gelu(self.norm1(x)))
+        
+        h_norm = self.norm2(h)
+        gamma, beta = torch.chunk(self.film(emb)[:, :, None, None], 2, dim=1)
+        h_mod = h_norm * (1 + gamma) + beta
+        h_out = self.conv2(F.gelu(h_mod))
+        
+        return x + h_out
 
     def forward(self, x, emb=None):
         if self.training:
-            from torch.utils.checkpoint import checkpoint
             return checkpoint(self._impl, x, emb, use_reentrant=False)
         return self._impl(x, emb)
-
-"""class ResidualBlock(nn.Module):
-    def __init__(self, channels, emb_dim, n_channels_group=8):
-        super().__init__()
-        self.norm = nn.GroupNorm(n_channels_group, channels)
-        self.ada_proj = nn.Linear(emb_dim, channels * 2)
-        self.conv = nn.Conv2d(channels, channels, 3, padding=1)
-        nn.init.zeros_(self.ada_proj.weight); nn.init.zeros_(self.ada_proj.bias)
-
-    def _inner(self, x, emb):
-        gamma, beta = torch.chunk(self.ada_proj(emb).unsqueeze(-1).unsqueeze(-1), 2, dim=1)
-        return x + self.conv(F.gelu(self.norm(x) * (1 + gamma) + beta))
-
-    def forward(self, x, emb):
-        if self.training:
-            from torch.utils.checkpoint import checkpoint
-            return checkpoint(self._inner, x, emb, use_reentrant=False)
-        return self._inner(x, emb)"""
-    
 
 class Image_Encoder(nn.Module):
     def __init__(self, filters_arr, denses_arr, label_emb_size, decoder_channels=None, in_channels=3, 
@@ -196,7 +197,7 @@ class Image_Encoder(nn.Module):
             
             self.downs.append(nn.ModuleDict({
                 'conv': nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1),
-                'residual': ResidualBlock(out_ch, 0, n_channels_group=n_channels_group)
+                'residual': ResidualBlock(out_ch, emb_dim=out_ch)
             }))
             
         self.act_gelu = nn.GELU()
@@ -362,26 +363,106 @@ class ResidualCrossAttentionBlock(nn.Module):
             return checkpoint(self._attn_impl, x, context, pos_x, pos_ctx, use_reentrant=False)
         return self._attn_impl(x, context, self._get_pos(*x.shape[2:], x.device), self._get_pos(*context.shape[2:], context.device))
 
+class RelativePositionBias(nn.Module):
+    def __init__(self, heads: int, max_h: int, max_w: int | None = None):
+        super().__init__()
+        max_w = max_w or max_h
+        self.heads = heads
+        self.max_h = max_h
+        self.max_w = max_w
+        table_h = 2 * max_h - 1
+        table_w = 2 * max_w - 1
+        self.rel = nn.Parameter(torch.randn(table_h * table_w, heads) * 0.02)
+        self._idx_cache = None
+        self._cache_shape: tuple[int, int] | None = None
+
+    @torch.no_grad()
+    def _build_index(self, h: int, w: int) -> torch.Tensor:
+        device = self.rel.device
+        gh = torch.arange(h, device=device)
+        gw = torch.arange(w, device=device)
+        # coords: (2, h*w)
+        coords = torch.stack(
+            torch.meshgrid(gh, gw, indexing="ij")
+        ).flatten(1)
+
+        rel = coords[:, :, None] - coords[:, None, :]
+
+        rel[0] += self.max_h - 1
+        rel[1] += self.max_w - 1
+        idx = rel[0] * (2 * self.max_w - 1) + rel[1]
+        return idx.long()
+
+    def forward(self, h: int, w: int) -> torch.Tensor:
+        if self._cache_shape != (h, w):
+            self._idx_cache   = self._build_index(h, w)
+            self._cache_shape = (h, w)
+
+        return self.rel[self._idx_cache].permute(2, 0, 1).contiguous()
+    
+class MHAAttention(nn.Module):
+    def __init__(self, ch, heads=4, head_dim=32, max_res=16):
+        super().__init__()
+        self.heads = heads
+        self.scale = head_dim ** -0.5
+        inner = heads * head_dim
+        self.norm = LayerNorm2d(ch)
+        self.to_q = nn.Conv2d(ch, inner, 1)
+        self.to_k = nn.Conv2d(ch, inner, 1)
+        self.to_v = nn.Conv2d(ch, inner, 1)
+        self.proj = nn.Conv2d(inner, ch, 1)
+        
+        self.rel_pos = RelativePositionBias(heads, max_h=max_res, max_w=max_res)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        x_n = self.norm(x)
+        q = self.to_q(x_n).reshape(b, self.heads, -1, h*w).transpose(-2, -1)
+        k = self.to_k(x_n).reshape(b, self.heads, -1, h*w).transpose(-2, -1)
+        v = self.to_v(x_n).reshape(b, self.heads, -1, h*w).transpose(-2, -1)
+        
+        bias = self.rel_pos(h, w).unsqueeze(0)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=bias)
+        
+        out = out.transpose(-2, -1).reshape(b, -1, h, w)
+        return x + self.proj(out)
+    
+class MHA_CrossAttention_RelBias(nn.Module):
+    def __init__(self, ch, context_ch, heads=4, head_dim=32, max_res=64):
+        super().__init__()
+        self.heads = heads
+        self.head_dim = head_dim
+        inner_dim = heads * head_dim
+        self.norm_x = LayerNorm2d(ch)
+        self.norm_ctx = LayerNorm2d(context_ch)
+        self.to_q = nn.Conv2d(ch, inner_dim, 1)
+        self.to_k = nn.Conv2d(context_ch, inner_dim, 1)
+        self.to_v = nn.Conv2d(context_ch, inner_dim, 1)
+        self.proj = nn.Conv2d(inner_dim, ch, 1)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+        self.rel_pos = RelativePositionBias(heads, max_h=max_res, max_w=max_res)
+    def forward(self, x, context):
+        b, c, h, w = x.shape
+        _, _, hc, wc = context.shape
+        x_n = self.norm_x(x)
+        ctx_n = self.norm_ctx(context)
+        q = self.to_q(x_n).view(b, self.heads, self.head_dim, h * w).transpose(-2, -1)
+        k = self.to_k(ctx_n).view(b, self.heads, self.head_dim, hc * wc).transpose(-2, -1)
+        v = self.to_v(ctx_n).view(b, self.heads, self.head_dim, hc * wc).transpose(-2, -1)
+        bias = self.rel_pos(h, w).unsqueeze(0) 
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=bias)
+        out = out.transpose(-2, -1).reshape(b, -1, h, w)
+        return x + self.proj(out)
+    
+def sinusoidal_embedding(t, dim):
+    half_dim = dim // 2
+    emb = math.log(10000) / (half_dim - 1)
+    emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+    emb = t[:, None] * emb[None, :]
+    return torch.cat((emb.sin(), emb.cos()), dim=-1)
     
 class UNet_FM(nn.Module):
-    """
-    Flow-matching UNet with optional multi-scale cross-attention.
-
-    When encoder_type=="resnet" and cross_attn==True:
-      - ResNet_Encoder produces one projected feature map per decoder up-stage.
-      - Each up-stage cross-attends to its spatially corresponding encoder feature.
-      - Encoder features are projected to exactly the same channel count as the
-        decoder at that stage, so no channel mismatch is possible.
-      - The bottleneck uses self-attention (no encoder feature at that depth).
-
-    Dimension contract
-    ------------------
-    filters_arr = [f0, f1, ..., fN]
-    decoder_channels (coarse->fine) = [f_{N-1}, f_{N-2}, ..., f_0]
-    ResNet features used (coarse->fine): layer3(256), layer2(128), layer1(64), stem(64)
-      each projected to the corresponding decoder_channels entry.
-    """
-
     def __init__(self, filters_arr, encoder_filters_arr, encoder_denses_arr,
                  t_emb_size, label_emb_size, side_pixels,
                  in_channels=1, in_channels_cond=3, n_channels_group=8,
@@ -393,31 +474,18 @@ class UNet_FM(nn.Module):
         self.cond_type     = cond_type
         self.use_cross     = cross_attn
         self.encoder_type  = encoder_type
+        self.side_pixels   = side_pixels
 
         decoder_channels = [filters_arr[i] for i in range(len(filters_arr) - 2, -1, -1)]
 
-        if encoder_type == "resnet":
+        if encoder_type == "vit":
+            target_sp_ch = decoder_channels[0] if cross_attn else filters_arr[-1]
+            self.label_emb = ViT_Encoder(target_sp_ch, label_emb_size, side_pixels)
+        elif encoder_type == "resnet":
             enc_dec_ch = decoder_channels if cross_attn else [filters_arr[-1]]
-            self.label_emb = ResNet_Encoder(
-                label_emb_size=label_emb_size,
-                decoder_channels=enc_dec_ch,
-                condition_ch=in_channels_cond,
-                denses_arr=encoder_denses_arr,
-            )
-        elif encoder_type == "simple":
-            enc_dec_ch = decoder_channels if cross_attn else [filters_arr[-1]]
-            
-            self.label_emb = Image_Encoder(
-                filters_arr=encoder_filters_arr, 
-                denses_arr=encoder_denses_arr, 
-                label_emb_size=label_emb_size,
-                decoder_channels=enc_dec_ch,
-                in_channels=in_channels_cond, 
-                n_channels_group=n_channels_group,
-                side_pixels=side_pixels,
-            )
+            self.label_emb = ResNet_Encoder(label_emb_size, enc_dec_ch, in_channels_cond, encoder_denses_arr)
         else:
-            raise ValueError(f"Encoder type {encoder_type} not supported.")
+            pass
 
         emb_dim   = t_emb_size + label_emb_size
         input_dim = (in_channels + in_channels_cond) if cond_type == "concat" else in_channels
@@ -433,17 +501,19 @@ class UNet_FM(nn.Module):
             out_ch = filters_arr[i]
             layers = nn.ModuleDict({'conv': nn.Conv2d(in_ch, out_ch, 3, padding=1)})
             if use_residuals:
-                layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group)
-            else:
-                layers['norm']     = nn.GroupNorm(n_channels_group, out_ch)
-                layers['ada_proj'] = nn.Linear(emb_dim, out_ch * 2)
+                layers['residual'] = ResidualBlock(out_ch, emb_dim)
             if i < len(filters_arr) - 1:
                 layers['downsample'] = nn.Conv2d(out_ch, out_ch, 3, stride=2, padding=1)
             self.downs.append(layers)
 
-        self.mid_res1 = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group) if use_residuals else nn.Identity()
-        self.mid_attn = ResidualAttentionBlock(filters_arr[-1], n_channels_group) if attn else nn.Identity()
-        self.mid_res2 = ResidualBlock(filters_arr[-1], emb_dim, n_channels_group) if use_residuals else nn.Identity()
+        self.mid_res1 = ResidualBlock(filters_arr[-1], emb_dim) if use_residuals else nn.Identity()
+
+        num_downsamples = len(filters_arr) - 1
+        bottleneck_res = math.ceil(self.side_pixels / (2 ** num_downsamples))
+        
+        self.mid_attn = MHAAttention(filters_arr[-1], max_res=bottleneck_res) if attn else nn.Identity()
+
+        self.mid_res2 = ResidualBlock(filters_arr[-1], emb_dim) if use_residuals else nn.Identity()
 
         self.ups = nn.ModuleList()
         for i, dec_ch in enumerate(decoder_channels):
@@ -451,34 +521,44 @@ class UNet_FM(nn.Module):
             in_ch  = filters_arr[coarser_idx]
             out_ch = dec_ch
 
+            num_downsamples = len(decoder_channels) - 1 - i 
+            current_res = math.ceil(self.side_pixels / (2**num_downsamples))
+
             layers = nn.ModuleDict({
-                'upsample': nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2),
+                'upsample_conv': nn.Conv2d(in_ch, out_ch, 3, padding=1),
                 'convskip': nn.Conv2d(out_ch * 2, out_ch, 3, padding=1),
             })
 
-            if use_residuals:
-                layers['residual'] = ResidualBlock(out_ch, emb_dim, n_channels_group)
-            else:
-                layers['norm']     = nn.GroupNorm(n_channels_group, out_ch)
-                layers['ada_proj'] = nn.Linear(emb_dim, out_ch * 2)
+            if use_residuals: layers['residual'] = ResidualBlock(out_ch, emb_dim)
 
-            is_largest_stage = (i == len(decoder_channels) - 1)
+            is_memory_safe_stage = (i < len(decoder_channels) - 1)
             
-            if cross_attn and not is_largest_stage:
-                layers['cross_attn'] = ResidualCrossAttentionBlock(out_ch, n_channels_group)
+            if cross_attn and is_memory_safe_stage:
+                ctx_ch = decoder_channels[0] if encoder_type == "vit" else dec_ch
+                layers['cross_attn'] = MHA_CrossAttention_RelBias(
+                    out_ch, 
+                    context_ch=ctx_ch, 
+                    max_res=current_res
+                )
 
             self.ups.append(layers)
 
         self.act_gelu = nn.GELU()
+
+        if self.use_residuals:
+            self.refine = ResidualBlock(filters_arr[0], emb_dim)
+        else:
+            self.refine = nn.Sequential(
+                LayerNorm2d(filters_arr[0]),
+                nn.Conv2d(filters_arr[0], filters_arr[0], 3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(filters_arr[0], filters_arr[0], 3, padding=1)
+        )
+
         self.last = nn.Conv2d(filters_arr[0], in_channels, 3, padding=1)
+        
         nn.init.zeros_(self.last.weight)
         nn.init.zeros_(self.last.bias)
-
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                if m.out_features in [f * 2 for f in filters_arr]:
-                    nn.init.zeros_(m.weight)
-                    nn.init.zeros_(m.bias)
 
     @torch.amp.autocast('cuda')
     def forward(self, x, t, y, drop_mask=None):
@@ -486,25 +566,21 @@ class UNet_FM(nn.Module):
 
         enc_out = self.label_emb(y, drop_mask=drop_mask)
         
-        if self.encoder_type in ["resnet", "simple"]:
-            multi_scale_feats, y_global = enc_out
-            sp_feat = None
-        else:
+        if self.encoder_type == "vit":
             sp_feat, y_global = enc_out
             multi_scale_feats = None
+        else:
+            multi_scale_feats, y_global = enc_out
+            sp_feat = None
 
-        if self.cond_type == "concat":
-            x = torch.cat([x, y], dim=1)
+        if self.cond_type == "concat": x = torch.cat([x, y], dim=1)
 
         combined_emb = torch.cat([t_emb, y_global], dim=1)
 
         skips = []
         for i, down in enumerate(self.downs):
             x = down['conv'](x)
-            if self.use_residuals:
-                x = down['residual'](x, combined_emb)
-            else:
-                x = self.act_gelu(self.apply_adagn(x, combined_emb, down['norm'], down['ada_proj']))
+            if self.use_residuals: x = down['residual'](x, combined_emb)
             if i < len(self.downs) - 1:
                 skips.append(x)
                 x = down['downsample'](x)
@@ -518,47 +594,34 @@ class UNet_FM(nn.Module):
 
             enc_feat = None
             if self.use_cross:
-                enc_feat = multi_scale_feats[i] if multi_scale_feats is not None else sp_feat
+                enc_feat = sp_feat if self.encoder_type == "vit" else multi_scale_feats[i]
 
-            def make_up_block(current_up, current_i):
+            def make_up_block(current_up):
                 def up_block_exec(x_in, skip_in, emb_in, enc_in):
-                    h = current_up['upsample'](x_in)
-                    if h.shape != skip_in.shape:
-                        h = F.interpolate(h, size=skip_in.shape[2:], mode='bilinear', align_corners=False)
+                    h = F.interpolate(x_in, size=skip_in.shape[2:], mode='bilinear', align_corners=False)
+                    h = current_up['upsample_conv'](h)
                     
                     h = current_up['convskip'](torch.cat([h, skip_in], dim=1))
-
-                    is_largest_stage = (current_i == len(self.ups) - 1)
                     
-                    if self.use_cross and enc_in is not None:
-                        if not is_largest_stage and 'cross_attn' in current_up:
-                            if enc_in.shape[2:] != h.shape[2:]:
-                                enc_in = F.interpolate(enc_in, size=h.shape[2:], mode='bilinear', align_corners=False)
-                            h = current_up['cross_attn'](h, enc_in)
-                        elif is_largest_stage:
-                            # --- DDP ZERO-GRADIENT TRICK ---
-                            # Links the unused ResNet feature to the graph with 0 impact
-                            h = h + 0.0 * enc_in.sum()
+                    if self.use_cross and enc_in is not None and 'cross_attn' in current_up:
+                        if enc_in.shape[2:] != h.shape[2:]:
+                            enc_in = F.interpolate(enc_in, size=h.shape[2:], mode='bilinear', align_corners=False)
+                        h = current_up['cross_attn'](h, enc_in)
 
-                    if self.use_residuals:
-                        h = current_up['residual'](h, emb_in)
-                    else:
-                        h = self.act_gelu(self.apply_adagn(h, emb_in, current_up['norm'], current_up['ada_proj']))
-                        
+                    if self.use_residuals: h = current_up['residual'](h, emb_in)
                     return h
                 return up_block_exec
 
-            up_block_fn = make_up_block(up, i)
+            up_block_fn = make_up_block(up)
 
             if self.training:
-                from torch.utils.checkpoint import checkpoint
                 x = checkpoint(up_block_fn, x, skip, combined_emb, enc_feat, use_reentrant=False)
             else:
                 x = up_block_fn(x, skip, combined_emb, enc_feat)
 
+        if self.use_residuals:
+            x = self.refine(x, combined_emb)
+        else:
+            x = x + self.refine(x)
+            
         return self.last(x)
-
-    def apply_adagn(self, x, emb, norm_layer, proj_layer):
-        x = norm_layer(x)
-        gamma, beta = torch.chunk(proj_layer(emb)[:, :, None, None], 2, dim=1)
-        return x * (1 + gamma) + beta

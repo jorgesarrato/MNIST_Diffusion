@@ -10,7 +10,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2
 
-
 from utils.config import Config
 from utils.readers import load_mnist_images, load_mnist_labels, load_nyu_labeled_subset, load_sun_rgbd_subset
 from utils.model_parser import get_model
@@ -37,8 +36,6 @@ def debug_model_architecture(model, input_size=(1, 1, 128, 128), cond_size=(1, 3
 
     hooks = []
     def register_recursive_hooks(module, prefix=""):
-        # We target specific blocks to avoid printing every single GroupNorm/GELU
-        # This will capture your Stages, Residuals, and Cross-Attentions
         targets = ('ResidualBlock', 'ResidualCrossAttentionBlock', 'Conv2d', 'ConvTranspose2d')
         
         for name, sub_module in module.named_children():
@@ -50,7 +47,6 @@ def debug_model_architecture(model, input_size=(1, 1, 128, 128), cond_size=(1, 3
                     print(f"{name:<50} | {shape}")
                 hooks.append(sub_module.register_forward_hook(hook_fn))
             
-            # Recurse deeper into ModuleLists and ModuleDicts
             register_recursive_hooks(sub_module, full_name)
 
     register_recursive_hooks(model)
@@ -85,44 +81,25 @@ def run():
         print(f"Using GPU {local_rank}")
         torch.cuda.manual_seed_all(Config.RANDOM_SEED)
 
+    print(f"Rank {local_rank}: Loading dataset paths...")
+    x_paths, y_paths = load_sun_rgbd_subset(Config.SUNRGBD_DATA_DIR)
 
-    cache_file = "dataset_cache.pt"
+    train_transform = v2.Compose([
+        v2.RandomResizedCrop(size=(Config.data_config['side_pixels'], Config.data_config['side_pixels']), scale=(0.16, 1.0), ratio=(1.0, 1.0), antialias=True),
+        v2.RandomHorizontalFlip(p=0.5)
+    ])
+    
+    val_transform = v2.Compose([
+        v2.CenterCrop(Config.data_config['side_pixels'])
+    ])
 
-    if is_main_process:
-        print(f"Rank {local_rank}: Reading MAT file and processing datasets...")
-        #x, y = load_nyu_labeled_subset(os.path.join(Config.NYU_DATA_DIR, 'nyu_depth_v2_labeled.mat'))
-        x, y = load_sun_rgbd_subset(Config.SUNRGBD_DATA_DIR)
+    x_train, x_test, y_train, y_test = train_test_split(x_paths, y_paths, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
+    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
 
-        train_transform = v2.Compose([
-            v2.RandomResizedCrop(size=(Config.data_config['side_pixels'], Config.data_config['side_pixels']), scale=(0.16, 1.0), ratio=(1.0, 1.0), antialias=True),
-            v2.RandomHorizontalFlip(p=0.5)
-        ])
-        
-        val_transform = v2.Compose([
-            v2.CenterCrop(Config.data_config['side_pixels'])
-        ])
-
-        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
-        x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=Config.data_config['val_split'], random_state=Config.RANDOM_SEED)
-
-        train_dataset = sun_depth_dataset(x_train, y_train, cache_size=Config.data_config['cache_size'], transform=train_transform)
-        val_dataset  = sun_depth_dataset(x_val, y_val, cache_size=Config.data_config['cache_size'], transform=val_transform)
-        test_dataset = sun_depth_dataset(x_test, y_test, cache_size=Config.data_config['cache_size'], transform=val_transform)
-        
-        torch.save({'train': train_dataset, 'val': val_dataset, 'test': test_dataset}, cache_file)
-        print(f"Rank {local_rank}: Dataset cached to {cache_file}")
-
-
-    if is_distributed:
-            dist.barrier()
-
-    if not is_main_process:
-        print(f"Rank {local_rank}: Loading pre-processed dataset directly from cache...")
-        cached_data = torch.load(cache_file, weights_only=False)
-        train_dataset = cached_data['train']
-        val_dataset   = cached_data['val']
-        test_dataset  = cached_data['test']
-
+    train_dataset = sun_depth_dataset(x_train, y_train, cache_size=Config.data_config['cache_size'], transform=train_transform)
+    val_dataset  = sun_depth_dataset(x_val, y_val, cache_size=Config.data_config['cache_size'], transform=val_transform)
+    test_dataset = sun_depth_dataset(x_test, y_test, cache_size=Config.data_config['cache_size'], transform=val_transform)
+    
     train_sampler = DistributedSampler(train_dataset) if is_distributed else None
     val_sampler = DistributedSampler(val_dataset, shuffle=False) if is_distributed else None
 
@@ -134,26 +111,64 @@ def run():
     model = get_model(Config.model_config).to(device)
     
     if is_main_process:
-            debug_model_architecture(
-                model, 
-                input_size=(1, 1, Config.data_config['side_pixels'], Config.data_config['side_pixels']),
-                cond_size=(1, 3, Config.data_config['side_pixels'], Config.data_config['side_pixels'])
-            )
+        debug_model_architecture(
+            model, 
+            input_size=(1, 1, Config.data_config['side_pixels'], Config.data_config['side_pixels']),
+            cond_size=(1, 3, Config.data_config['side_pixels'], Config.data_config['side_pixels'])
+        )
             
     if is_distributed:
+        for param in model.parameters():
+            param.data = param.data.contiguous()
+            
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, static_graph=True)
 
     optimizer = get_optimizer(model, Config.training_config)
     scheduler = get_scheduler(optimizer, Config.training_config, steps_per_epoch=len(train_loader))
 
+    resume_path = "checkpoint_latest.pth"
+    start_epoch = 1
+    best_val = float('inf')
+    ema_state = None
+
+    if os.path.exists(resume_path):
+        if is_main_process:
+            print(f"Loading training checkpoint from {resume_path}...")
+        
+        ckpt = torch.load(resume_path, map_location='cpu', weights_only=False)
+        
+        if is_distributed:
+            model.module.load_state_dict(ckpt['model_state_dict'])
+        else:
+            model.load_state_dict(ckpt['model_state_dict'])
+            
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        
+        if scheduler and ckpt.get('scheduler_state_dict'):
+            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+            
+        start_epoch = ckpt['epoch'] + 1
+        best_val = ckpt['best_val']
+        ema_state = ckpt['ema_state_dict']
+        
+        if is_main_process:
+            print(f"Resuming training from epoch {start_epoch} with best val loss {best_val:.4f}")
+
     if is_main_process:
         mlflow.set_tracking_uri("file://" + Config.MLFLOW_DIR)
         mlflow.set_experiment(Config.experiment_name)
-        run_obj = mlflow.start_run(run_name=Config.run_name)
-        mlflow.log_params(Config.model_config)
-        mlflow.log_params(Config.training_config)
-        mlflow.set_tag("problem", "diffusion_nyu")
+
+        run_id = ckpt.get('mlflow_run_id') if (os.path.exists(resume_path) and 'ckpt' in locals()) else None
+        
+        if run_id:
+            print(f"Resuming MLflow run: {run_id}")
+            run_obj = mlflow.start_run(run_id=run_id)
+        else:
+            run_obj = mlflow.start_run(run_name=Config.run_name)
+            mlflow.log_params(Config.model_config)
+            mlflow.log_params(Config.training_config)
+            mlflow.set_tag("problem", "diffusion_nyu")
 
     if is_distributed:
         dist.barrier()
@@ -177,7 +192,11 @@ def run():
         cond_drop_prob=Config.training_config.get('cond_drop_prob', 0.20),
         is_distributed=is_distributed, 
         train_sampler=train_sampler,
-        is_main_process=is_main_process
+        is_main_process=is_main_process,
+        log_depth=Config.training_config.get('log_depth', False),
+        start_epoch=start_epoch,      
+        best_val=best_val,            
+        ema_state=ema_state          
     )
 
     if is_main_process:
@@ -196,16 +215,22 @@ def run():
         torch.save(m.state_dict(), "model_final.pth")
         mlflow.log_artifact("model_final.pth")
         
+        if os.path.exists("checkpoint_latest.pth"):
+            os.remove("checkpoint_latest.pth")
+            print("Deleted intermediate checkpoint 'checkpoint_latest.pth' to ensure a fresh start next run.")
+        
         print("Generating Full-Resolution Patch-Stitched Animations...")
         
         test_dataset.transform = None
         train_dataset.transform = None
 
-        guidance_scales = Config.training_config.get('guidance_scale', [1.5])
+        guidance_scales = Config.training_config.get('guidance_scale', 1.5)
+        if not isinstance(guidance_scales, (list, tuple)):
+            guidance_scales = [guidance_scales]
 
         for ii in range(5):
             for gs in guidance_scales:
-                gt_depth, rgb_label = test_dataset[ii] 
+                gt_depth, rgb_label, mask = test_dataset[ii] 
                 
                 snapshots = save_full_flow_evolution(
                     model=m, 
@@ -217,20 +242,21 @@ def run():
                     guidance_scale=gs
                 )
                 
-                torch.save(snapshots, f"snapshots_test_{ii}_{gs}.pt")
-                mlflow.log_artifact(f"snapshots_test_{ii}_{gs}.pt")
+                torch.save(snapshots, f"snapshots_test_{ii}_w{gs}.pt")
+                mlflow.log_artifact(f"snapshots_test_{ii}_w{gs}.pt")
                 
                 create_depth_flow_animation(
                     snapshots, 
-                    filename=f"flow_evolution_test_log_{ii}_{gs}.gif", 
+                    filename=f"flow_evolution_test_log_{ii}_w{gs}.gif", 
                     n_steps=100, 
                     timing_mode='logarithmic', 
-                    gt_depth=gt_depth.unsqueeze(0) 
+                    gt_depth=gt_depth.unsqueeze(0), 
+                    log_depth = Config.training_config.get('log_depth', False)
                 )
 
         for ii in range(5):
             for gs in guidance_scales:
-                gt_depth, rgb_label = train_dataset[ii] 
+                gt_depth, rgb_label, mask = train_dataset[ii] 
                 
                 snapshots = save_full_flow_evolution(
                     model=m, 
@@ -242,15 +268,16 @@ def run():
                     guidance_scale=gs
                 )
                 
-                torch.save(snapshots, f"snapshots_train_{ii}_{gs}.pt")
-                mlflow.log_artifact(f"snapshots_train_{ii}_{gs}.pt")
+                torch.save(snapshots, f"snapshots_train_{ii}_w{gs}.pt")
+                mlflow.log_artifact(f"snapshots_train_{ii}_w{gs}.pt")
                 
                 create_depth_flow_animation(
                     snapshots, 
-                    filename=f"flow_evolution_train_log_{ii}_{gs}.gif", 
+                    filename=f"flow_evolution_train_log_{ii}_w{gs}.gif", 
                     n_steps=100, 
                     timing_mode='logarithmic', 
-                    gt_depth=gt_depth.unsqueeze(0)
+                    gt_depth=gt_depth.unsqueeze(0),
+                    log_depth = Config.training_config.get('log_depth', False)
                 )
 
         mlflow.end_run()

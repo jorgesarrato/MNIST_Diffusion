@@ -50,31 +50,44 @@ def compute_gradient_loss(pred, target, mask):
     return grad_y + grad_x
 
 class ScaleInvariantLoss(nn.Module):
-    def __init__(self, lam=0.85, depth_min=0.7, depth_max=10.0):
+    def __init__(self, lam=0.5, depth_min=0.7, depth_max=10.0, log_depth=False):
         super().__init__()
         self.lam = lam
         self.depth_min = depth_min
         self.depth_max = depth_max
+        self.log_depth = log_depth
 
     def forward(self, pred, target, mask):
-        pred_real = ((pred + 1.0) / 2.0) * (self.depth_max - self.depth_min) + self.depth_min
-        target_real = ((target + 1.0) / 2.0) * (self.depth_max - self.depth_min) + self.depth_min
-        
         eps = 1e-6
-        pred_real = torch.clamp(pred_real, min=eps)
-        target_real = torch.clamp(target_real, min=eps)
+        import math
 
-        log_diff = torch.log(pred_real) - torch.log(target_real)
-        
-        log_diff = log_diff * mask
-        
-        n = torch.clamp(mask.sum(dim=(1, 2, 3)), min=1e-6)
+        if self.log_depth:
+            log_min = math.log(self.depth_min)
+            log_max = math.log(self.depth_max)
 
-        term1 = (log_diff ** 2).sum(dim=(1, 2, 3)) / n
-        term2 = (log_diff.sum(dim=(1, 2, 3)) ** 2) / (n ** 2)
+            log_pred = (pred + 1) / 2 * (log_max - log_min) + log_min
+            log_target = (target + 1) / 2 * (log_max - log_min) + log_min
+
+        else:
+            pred_depth = (pred + 1) / 2 * (self.depth_max - self.depth_min) + self.depth_min
+            target_depth = (target + 1) / 2 * (self.depth_max - self.depth_min) + self.depth_min
+
+            pred_depth = torch.clamp(pred_depth, min=self.depth_min + eps)
+            target_depth = torch.clamp(target_depth, min=self.depth_min + eps)
+
+            log_pred = torch.log(pred_depth)
+            log_target = torch.log(target_depth)
+
+        log_diff = (log_pred - log_target) * mask
+
+        n = torch.clamp(mask.sum(dim=(1,2,3)), min=1.0)
+
+        mean = log_diff.sum(dim=(1,2,3)) / n
+        term1 = (log_diff ** 2).sum(dim=(1,2,3)) / n
+        term2 = mean ** 2
 
         return term1 - self.lam * term2
-
+    
 class FlowMatchingLoss(nn.Module):
 
     def __init__(
@@ -82,7 +95,8 @@ class FlowMatchingLoss(nn.Module):
         base_type="L1",
         grad_weight=0.5,
         si_weight=0.0,
-        edge_weight=0.0
+        edge_weight=0.0,
+        log_depth=False
     ):
         super().__init__()
 
@@ -96,11 +110,9 @@ class FlowMatchingLoss(nn.Module):
         else:
             self.base_loss = nn.SmoothL1Loss(reduction="none", beta=0.05)
 
-        self.si_loss = ScaleInvariantLoss(lam=0.85)
+        self.si_loss = ScaleInvariantLoss(lam=si_weight, log_depth=log_depth)
 
-    def forward(self, v_pred, v_target, x1_pred, x_target, image):
-
-        mask = (x_target > -0.99).float()
+    def forward(self, v_pred, v_target, x1_pred, x_target, image, mask):
 
         valid_pixels = torch.clamp(mask.sum(dim=(1, 2, 3)), min=1e-6)
 
@@ -110,8 +122,8 @@ class FlowMatchingLoss(nn.Module):
             base_raw = self.base_loss(v_pred, v_target) * mask
             base = base_raw.sum(dim=(1, 2, 3)) / valid_pixels
 
-        grad = compute_gradient_loss(x1_pred, x_target, mask)
-        total_loss = base + self.grad_weight * grad
+        grad_v = compute_gradient_loss(v_pred, v_target, mask)
+        total_loss = base + self.grad_weight * grad_v
 
         if self.edge_weight > 0:
             edge = compute_edge_aware_loss(x1_pred, x_target, image, mask)

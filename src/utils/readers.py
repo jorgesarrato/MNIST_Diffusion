@@ -49,8 +49,8 @@ def load_sun_rgbd_fast(base_dir, depth_type="depth_bfx"):
             
     return sorted(rgb_paths), sorted(depth_paths)
 
-def load_sun_rgbd_subset(base_dir, n_read=-1):
 
+def load_sun_rgbd_subset(base_dir, n_read=-1):
     if not os.path.exists("dataset_manifest.json"):
         rgb, depth = load_sun_rgbd_fast(base_dir)
         with open("dataset_manifest.json", "w") as f:
@@ -64,23 +64,7 @@ def load_sun_rgbd_subset(base_dir, n_read=-1):
         rgb_paths = rgb_paths[:n_read]
         depth_paths = depth_paths[:n_read]
         
-    images = []
-    depths = []
-    
-    for r_path, d_path in tqdm.tqdm(zip(rgb_paths, depth_paths)):
-        img = Image.open(r_path).convert('RGB')
-        depth = Image.open(d_path)
-        
-        depth_np = np.array(depth).astype(np.uint16)
-        depth_corrected = (depth_np >> 3) | (depth_np << 13)
-        depth_corrected = depth_corrected.astype(np.float32) / 1000.0
-        depth_corrected[depth_corrected > 10.0] = 0.0
-        
-        images.append(np.array(img))
-        depths.append(depth_corrected)
-
-    return images, depths
-
+    return rgb_paths, depth_paths
 
 if __name__ == '__main__':
     from config import Config

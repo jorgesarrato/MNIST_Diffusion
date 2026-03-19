@@ -16,21 +16,22 @@ class Config:
 
     data_config = {
             "data_dir": DATA_DIR,
-            "batch_size": 32,
+            "batch_size": 8,
             "num_workers": 2,
             "num_workers_train": 2,
             "val_split": 0.1,
-            "side_pixels": 128,
-            "cache_size": 256
+            "side_pixels": 140,
+            "cache_size": 256,
+            "log_depth": True
         }
     model_config = {
             "type": "UNet_FM",
-            "filters_arr": [16, 32, 64, 128, 256],
-            "encoder_filters_arr": [16, 32, 64, 128, 256],
+            "filters_arr": [32, 64, 128, 256],
+            "encoder_filters_arr": [32, 64, 128, 256],
             "encoder_denses_arr": [],
-            "t_emb_size": 2048,
-            "label_emb_size": 8192,
-            "side_pixels": 128,
+            "t_emb_size": 512,
+            "label_emb_size": 512,
+            "side_pixels": 140,
             "in_channels": 1,
             "in_channels_cond": 3,
             "n_channels_group": 8,
@@ -38,23 +39,23 @@ class Config:
             "cross_attn": True,
             "use_residuals": True,
             "cond_type": "simple",
-            "encoder_type": "resnet"
+            "encoder_type": "vit"
             }
     training_config = {
-            "lr": 2e-4,
-            "epochs": 500,
+            "lr": 1e-4,
+            "epochs": 300,
             "optimizer": "AdamW",
-            "weight_decay": 0.05,
+            "weight_decay": 0.02,
             "scheduler_factor": 0.5,
             "patience": 20,
             "threshold": 0.005,
             "loss": "L1",
-            "grad_weight": 0.75,
+            "grad_weight": 0.0,
             "edge_weight": 0.0,
             "si_weight": 0.0,
             "weight_type": "none",
             "time_sampling": "uniform",
-            "backbone_lr_ratio": 0.5,
+            "backbone_lr_ratio": 0.2,
             "scheduler": "OneCycleLR",
             "pct_start": 0.10,
             "final_div_factor": 25.0,

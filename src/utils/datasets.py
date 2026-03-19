@@ -1,6 +1,8 @@
 import torch
 from torchvision.transforms import v2
 import numpy as np
+from PIL import Image
+import math
 
 class mnist_dataset(torch.utils.data.Dataset):
     def __init__(self, x, y):
@@ -49,56 +51,69 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.depths_cache[idx], self.images_cache[idx]
     
-
 class sun_depth_dataset(torch.utils.data.Dataset):
-    def __init__(self, images_list, depths_list, cache_size=384, transform=None):
-        self.images_cache = []
-        self.depths_cache = []
+    def __init__(self, images_paths, depths_paths, cache_size=384, transform=None, log_depth=True):
+        self.images_paths = images_paths
+        self.depths_paths = depths_paths
         self.transform = transform
+        self.log_depth = log_depth
         
-        standardize = v2.Compose([
-            v2.Resize(cache_size, antialias=True),
+        self.standardize = v2.Compose([
+            v2.Resize(cache_size, interpolation=v2.InterpolationMode.BILINEAR, antialias=True),
             v2.CenterCrop(cache_size) 
         ])
-        
-        print(f"Standardizing images to {cache_size}x{cache_size} squares...")
-        for img_np, depth_np in zip(images_list, depths_list):
-
-            valid_rows = np.any(depth_np > 0, axis=1)
-            valid_cols = np.any(depth_np > 0, axis=0)
-            
-            if not valid_rows.any() or not valid_cols.any():
-                continue
                 
+        self.DEPTH_MIN, self.DEPTH_MAX = 0.7, 10.0
+        self.LOG_MIN = math.log(self.DEPTH_MIN)
+        self.LOG_MAX = math.log(self.DEPTH_MAX)
+
+    def __len__(self):
+        return len(self.images_paths)
+    
+    def __getitem__(self, idx):
+        img = Image.open(self.images_paths[idx]).convert('RGB')
+        depth = Image.open(self.depths_paths[idx])
+        
+        img_np = np.array(img)
+        depth_np = np.array(depth).astype(np.uint16)
+        
+        depth_corrected = (depth_np >> 3) | (depth_np << 13)
+        depth_corrected = depth_corrected.astype(np.float32) / 1000.0
+        depth_corrected[depth_corrected > 10.0] = 0.0
+        
+        valid_rows = np.any(depth_corrected > 0, axis=1)
+        valid_cols = np.any(depth_corrected > 0, axis=0)
+        
+        if valid_rows.any() and valid_cols.any():
             rmin, rmax = np.where(valid_rows)[0][[0, -1]]
             cmin, cmax = np.where(valid_cols)[0][[0, -1]]
             
-            img_cropped = img_np[rmin:rmax+1, cmin:cmax+1]
-            depth_cropped = depth_np[rmin:rmax+1, cmin:cmax+1]
+            img_np = img_np[rmin:rmax+1, cmin:cmax+1]
+            depth_corrected = depth_corrected[rmin:rmax+1, cmin:cmax+1]
             
-            img_t = torch.from_numpy(img_cropped).permute(2, 0, 1) / 255.0
-            depth_t = torch.from_numpy(depth_cropped).unsqueeze(0)
+        img_t = torch.from_numpy(img_np).permute(2, 0, 1) / 255.0
+        depth_t = torch.from_numpy(depth_corrected).unsqueeze(0)
+        
+        invalid_mask_t = (depth_t == 0.0).float()
+        
+        depth_t = torch.clamp(depth_t, self.DEPTH_MIN, self.DEPTH_MAX)
+        
+        if self.log_depth:
+            depth_t = (torch.log(depth_t) - self.LOG_MIN) / (self.LOG_MAX - self.LOG_MIN)
+        else:
+            depth_t = (depth_t - self.DEPTH_MIN) / (self.DEPTH_MAX - self.DEPTH_MIN)
             
-            depth_t = torch.clamp(depth_t, 0.7, 10.0)
-            depth_t = (depth_t - 0.7) / (10.0 - 0.7)
-            depth_t = depth_t * 2.0 - 1.0
-            
-            stacked = torch.cat([img_t, depth_t], dim=0)
-            stacked = standardize(stacked)
-            
-            self.images_cache.append(stacked[:3])
-            self.depths_cache.append(stacked[3:4])
-
-    def __len__(self):
-        return len(self.images_cache)
-    
-    def __getitem__(self, idx):
-        depth = self.depths_cache[idx]
-        img = self.images_cache[idx]
+        depth_t = depth_t * 2.0 - 1.0
+        
+        stacked = torch.cat([img_t, depth_t, invalid_mask_t], dim=0)
+        stacked = self.standardize(stacked)
         
         if self.transform is not None:
-            stacked = torch.cat([img, depth], dim=0)
             stacked = self.transform(stacked)
-            img, depth = stacked[:3], stacked[3:4]
             
-        return depth, img
+        img_out = stacked[:3]
+        depth_out = stacked[3:4]
+        
+        invalid_mask_out = (stacked[4:5] < 0.5).float()
+        
+        return depth_out, img_out, invalid_mask_out

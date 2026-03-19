@@ -158,7 +158,7 @@ def process_rgb_for_plot(img_tensor):
         
     return img
 
-def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_factor=4, axes=None, cax=None, fig=None):
+def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_factor=4, axes=None, cax=None, fig=None, log_depth=False):
 
     if axes is None:
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -177,34 +177,41 @@ def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_facto
         axes[0].text(0.5, 0.5, "No Condition", ha='center')
     axes[0].axis('off')
 
-    if isinstance(depth_map, torch.Tensor):
-        depth_map = depth_map.detach().cpu().squeeze().numpy()
-    depth_map = (depth_map + 1) / 2
-    
-    if gt_depth is not None:
-        if isinstance(gt_depth, torch.Tensor):
-            gt_depth_np = gt_depth.detach().cpu().squeeze().numpy().copy()
+    def unscale_depth(d, d_min=0.7, d_max=10.0, is_log=True):
+        if isinstance(d, torch.Tensor):
+            d = d.detach().cpu().squeeze().numpy().copy()
         else:
-            gt_depth_np = np.array(gt_depth).copy()
+            d = np.array(d).copy().squeeze()
             
-        gt_depth_np = (gt_depth_np + 1) / 2
+        d = (d + 1.0) / 2.0
         
-        vmin = min(depth_map.min(), gt_depth_np.min())
-        vmax = max(depth_map.max(), gt_depth_np.max())
+        if is_log:
+            log_min, log_max = np.log(d_min), np.log(d_max)
+            d_log = d * (log_max - log_min) + log_min
+            return np.exp(d_log)
+        else:
+            return d * (d_max - d_min) + d_min
+    
+    depth_map_np = unscale_depth(depth_map, is_log=log_depth)
+
+    if gt_depth is not None:
+        gt_depth_np = unscale_depth(gt_depth, is_log=log_depth)
+        vmin = min(depth_map_np.min(), gt_depth_np.min())
+        vmax = max(depth_map_np.max(), gt_depth_np.max())
     else:
-        vmin = depth_map.min()
-        vmax = depth_map.max()
+        vmin = depth_map_np.min()
+        vmax = depth_map_np.max()
 
     axes[1].clear()
     if gt_depth is not None:
         axes[1].imshow(gt_depth_np, cmap='inferno', origin='upper', vmin=vmin, vmax=vmax)
-        axes[1].set_title("Ground Truth Depth")
+        axes[1].set_title("Ground Truth Depth (m)")
     else:
         axes[1].text(0.5, 0.5, "No GT Depth Provided", ha='center')
     axes[1].axis('off')
 
     axes[2].clear()
-    im_pred = axes[2].imshow(depth_map, cmap='inferno', origin='upper', vmin=vmin, vmax=vmax)
+    im_pred = axes[2].imshow(depth_map_np, cmap='inferno', origin='upper', vmin=vmin, vmax=vmax)
 
     if v_field is not None:
         def block_mean(ar, fact):
@@ -236,7 +243,7 @@ def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_facto
 
     return axes
 
-def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1, downsample_factor=10, gt_depth=None):
+def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1, downsample_factor=10, gt_depth=None, log_depth=False):
     total_snaps = len(snapshots)
     if (n_steps <= 0) or (n_steps > total_snaps):
         n_steps = total_snaps
@@ -272,7 +279,8 @@ def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timin
             downsample_factor=downsample_factor, 
             axes=axes, 
             cax=cax, 
-            fig=fig
+            fig=fig,
+            log_depth=log_depth
         )
 
     anim = FuncAnimation(fig, update, frames=len(selected_snapshots), interval=100)

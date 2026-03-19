@@ -37,8 +37,8 @@ def evaluate(model, loss_fn, dataloader_val, device='cpu', weight_type='quad', t
     imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
 
     with torch.no_grad():
-        for x, y in dataloader_val:
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+        for x, y, mask in dataloader_val:
+            x, y, mask = x.to(device, non_blocking=True), y.to(device, non_blocking=True), mask.to(device, non_blocking=True)
             y = (y - imagenet_mean) / imagenet_std
 
             x0 = torch.randn_like(x)
@@ -53,10 +53,8 @@ def evaluate(model, loss_fn, dataloader_val, device='cpu', weight_type='quad', t
             with torch.amp.autocast('cuda'):
                 v_pred = model(xt, t, y).view_as(v)
                 x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
-                
-                mask = (x > -0.99).float()
-                
-                per_sample_loss = loss_fn(v_pred, v, x1_pred, x, y)
+                                
+                per_sample_loss = loss_fn(v_pred, v, x1_pred, x, y, mask)
                 weights = get_loss_weights(t, weight_type=weight_type)
                 metrics["val_total"] += (per_sample_loss * weights).mean().item()
                 
@@ -77,7 +75,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
           dataloader_val=None, overfit_x0=None, weight_type='quad', 
           side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10, 
           ema_decay=0.999, cond_drop_prob=0.20,
-          is_distributed=False, train_sampler=None, is_main_process=True):
+          is_distributed=False, train_sampler=None, is_main_process=True, log_depth=False,
+          start_epoch=1, best_val=float('inf'), ema_state=None):
     
     imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
     imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
@@ -92,10 +91,13 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
         v2.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
     ])
 
-    loss_fn = FlowMatchingLoss(base_type=loss_type, grad_weight=grad_weight, si_weight=si_weight, edge_weight=edge_weight)
+    loss_fn = FlowMatchingLoss(base_type=loss_type, grad_weight=grad_weight, si_weight=si_weight, edge_weight=edge_weight, log_depth=log_depth)
     
     ema_avg_fn = get_ema_multi_avg_fn(ema_decay)
     ema_model = AveragedModel(model, multi_avg_fn=ema_avg_fn).to(device)
+
+    if ema_state is not None:
+            ema_model.load_state_dict(ema_state)
 
     use_cuda = 'cuda' in str(device)
     device_type = 'cuda' if use_cuda else 'cpu'
@@ -104,22 +106,21 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
     is_batch_scheduler = isinstance(scheduler, (torch.optim.lr_scheduler.OneCycleLR, torch.optim.lr_scheduler.CyclicLR, torch.optim.lr_scheduler.CosineAnnealingWarmRestarts))
     is_plateau_scheduler = isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
 
-    best_val   = float('inf')
     no_improve = 0
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         if is_distributed and train_sampler is not None:
-                train_sampler.set_epoch(epoch)
+            train_sampler.set_epoch(epoch)
 
         model.train()
         total_loss = 0
 
-        for x, y in dataloader_train:
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+        for x, y, mask in dataloader_train:
+            x, y, mask = x.to(device, non_blocking=True), y.to(device, non_blocking=True), mask.to(device, non_blocking=True)
 
-            stacked = torch.cat([y, x], dim=1)
+            stacked = torch.cat([y, x, mask], dim=1)
             stacked = _GPU_SPATIAL(stacked)
-            y, x = stacked[:, :3], stacked[:, 3:4]
+            y, x, mask = stacked[:, :3], stacked[:, 3:4], stacked[:, 4:5]
             y = _GPU_COLOR(y)
             y = _GPU_EXTRA(y)
 
@@ -147,13 +148,13 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
                 x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
                 
                 # Pass 'y' (the RGB image) to satisfy the edge-aware loss
-                per_sample_loss = loss_fn(v_pred, v, x1_pred, x, y) 
+                per_sample_loss = loss_fn(v_pred, v, x1_pred, x, y, mask)
                 weights = get_loss_weights(t, weight_type=weight_type)
                 loss = (per_sample_loss * weights).mean()
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             scaler.step(optimizer)
             scaler.update()
@@ -205,8 +206,17 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
                 
                 if is_main_process:
                     print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val Total: {best_val:.4f} | Val L1: {val_metrics["val_l1"]:.4f} | LR: {current_lr:.6f} *** NEW BEST! ***', flush=True)
-                    m = ema_model.module.module if hasattr(ema_model.module, 'module') else ema_model.module
-                    torch.save(m.state_dict(), "model_best.pth")
+                    ckpt = {
+                        'epoch': epoch,
+                        'model_state_dict': model.module.state_dict() if is_distributed else model.state_dict(),
+                        'ema_state_dict': ema_model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                        'best_val': best_val,
+                        'mlflow_run_id': mlflow.active_run().info.run_id if mlflow.active_run() else None
+                    }
+                    torch.save(ckpt, "checkpoint_latest.pth")
+                    print(f"*** Full checkpoint saved at epoch {epoch} ***")
                     if mlflow.active_run():
                         mlflow.log_metric("best_val_loss", best_val, step=epoch)
             else:
