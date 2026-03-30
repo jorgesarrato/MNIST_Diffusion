@@ -5,6 +5,7 @@ from torchvision.transforms import v2
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import torch.distributed as dist
 
+from utils.config import Config
 from utils.losses import FlowMatchingLoss, compute_gradient_loss, ScaleInvariantLoss
 
 def sync_ema_buffers(base_model, ema_model):
@@ -28,9 +29,9 @@ def get_loss_weights(t, weight_type="quad", min_weight=0.1):
 def evaluate(model, loss_fn, dataloader_val, device='cpu', weight_type='quad', time_sampling='uniform'):
     model.eval()
     
-    metrics = {"val_total": 0.0, "val_l1": 0.0, "val_grad": 0.0, "val_si": 0.0}
+    metrics = {"val_total": 0.0, "val_l1": 0.0, "val_grad": 0.0, "val_si": 0.0, "val_l1_standard": 0.0}
     
-    l1_tracker = nn.SmoothL1Loss(reduction='none', beta=0.05)
+    l1_tracker = nn.SmoothL1Loss(reduction='none', beta=0.1)
     si_tracker = ScaleInvariantLoss()
 
     imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
@@ -42,6 +43,7 @@ def evaluate(model, loss_fn, dataloader_val, device='cpu', weight_type='quad', t
             y = (y - imagenet_mean) / imagenet_std
 
             x0 = torch.randn_like(x)
+            
             if time_sampling == "logit_normal":
                 t = torch.sigmoid(torch.randn(size=(x.shape[0],), device=device))
             else:
@@ -56,6 +58,7 @@ def evaluate(model, loss_fn, dataloader_val, device='cpu', weight_type='quad', t
                                 
                 per_sample_loss = loss_fn(v_pred, v, x1_pred, x, y, mask)
                 weights = get_loss_weights(t, weight_type=weight_type)
+                
                 metrics["val_total"] += (per_sample_loss * weights).mean().item()
                 
                 l1_raw = l1_tracker(v_pred, v) * mask
@@ -65,13 +68,21 @@ def evaluate(model, loss_fn, dataloader_val, device='cpu', weight_type='quad', t
                 metrics["val_grad"] += compute_gradient_loss(x1_pred, x, mask).mean().item()
                 metrics["val_si"] += si_tracker(x1_pred, x, mask).mean().item()
 
+            t_fixed = torch.full((x.shape[0],), 0.5, device=device)
+            xt_fixed = t_fixed[:, None, None, None]*x + (1-t_fixed[:, None, None, None])*x0
+            
+            with torch.amp.autocast('cuda'):
+                v_pred_fixed = model(xt_fixed, t_fixed, y).view_as(v)
+                l1_pure = torch.abs(v_pred_fixed - v) * mask
+                metrics["val_l1_standard"] += (l1_pure.sum(dim=(1, 2, 3)) / valid_pixels).mean().item()
+
     model.train()
     n = len(dataloader_val)
     return {k: v / n for k, v in metrics.items()}
 
 
 def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu', 
-          loss_type='L1', grad_weight=0.5, si_weight=0.0, edge_weight=0.0, 
+          loss_type='L1', grad_weight=0.5, si_weight=0.0, edge_weight=0.0, x1_weight=0.0,
           dataloader_val=None, overfit_x0=None, weight_type='quad', 
           side_pixels=128, patience=5, time_sampling='uniform', eval_freq=10, 
           ema_decay=0.999, cond_drop_prob=0.20,
@@ -81,17 +92,11 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
     imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
     imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
 
-    _GPU_SPATIAL = v2.Compose([
-        v2.RandomHorizontalFlip(p=0.5),
-        #v2.RandomRotation(degrees=5),
-    ])
+    _GPU_SPATIAL = v2.Compose([v2.RandomHorizontalFlip(p=0.5)])
     _GPU_COLOR = v2.ColorJitter(brightness=0.25, contrast=0.2, saturation=0.2, hue=0.05)
-    _GPU_EXTRA = v2.Compose([
-        v2.RandomGrayscale(p=0.05),
-        v2.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
-    ])
+    _GPU_EXTRA = v2.Compose([v2.RandomGrayscale(p=0.05), v2.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))])
 
-    loss_fn = FlowMatchingLoss(base_type=loss_type, grad_weight=grad_weight, si_weight=si_weight, edge_weight=edge_weight, log_depth=log_depth)
+    loss_fn = FlowMatchingLoss(base_type=loss_type, grad_weight=grad_weight, si_weight=si_weight, edge_weight=edge_weight, x1_weight=x1_weight, log_depth=log_depth)
     
     ema_avg_fn = get_ema_multi_avg_fn(ema_decay)
     ema_model = AveragedModel(model, multi_avg_fn=ema_avg_fn).to(device)
@@ -116,8 +121,9 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
         total_loss = 0
 
         for x, y, mask in dataloader_train:
-            x, y, mask = x.to(device, non_blocking=True), y.to(device, non_blocking=True), mask.to(device, non_blocking=True)
-
+            x = x.to(device, non_blocking=True, memory_format=torch.channels_last)
+            y = y.to(device, non_blocking=True, memory_format=torch.channels_last)
+            mask = mask.to(device, non_blocking=True, memory_format=torch.channels_last)
             stacked = torch.cat([y, x, mask], dim=1)
             stacked = _GPU_SPATIAL(stacked)
             y, x, mask = stacked[:, :3], stacked[:, 3:4], stacked[:, 4:5]
@@ -147,7 +153,6 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
 
                 x1_pred = xt + (1 - t[:, None, None, None]) * v_pred
                 
-                # Pass 'y' (the RGB image) to satisfy the edge-aware loss
                 per_sample_loss = loss_fn(v_pred, v, x1_pred, x, y, mask)
                 weights = get_loss_weights(t, weight_type=weight_type)
                 loss = (per_sample_loss * weights).mean()
@@ -186,7 +191,8 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
             if is_distributed:
                 metrics_tensor = torch.tensor([
                     val_metrics["val_total"], val_metrics["val_l1"], 
-                    val_metrics["val_grad"], val_metrics["val_si"]
+                    val_metrics["val_grad"], val_metrics["val_si"],
+                    val_metrics["val_l1_standard"]
                 ], device=device)
                 
                 dist.all_reduce(metrics_tensor, op=dist.ReduceOp.SUM)
@@ -196,6 +202,7 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
                 val_metrics["val_l1"] = metrics_tensor[1].item()
                 val_metrics["val_grad"] = metrics_tensor[2].item()
                 val_metrics["val_si"] = metrics_tensor[3].item()
+                val_metrics["val_l1_standard"] = metrics_tensor[4].item()
 
             if is_main_process and mlflow.active_run():
                 mlflow.log_metrics(val_metrics, step=epoch)
@@ -205,24 +212,38 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
                 no_improve = 0
                 
                 if is_main_process:
-                    print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val Total: {best_val:.4f} | Val L1: {val_metrics["val_l1"]:.4f} | LR: {current_lr:.6f} *** NEW BEST! ***', flush=True)
+                    print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val Total: {best_val:.4f} | Val L1: {val_metrics["val_l1"]:.4f} | Std L1(t=0.5): {val_metrics["val_l1_standard"]:.4f} | LR: {current_lr:.6f} *** NEW BEST! ***', flush=True)
+                    
+                    raw_model = model.module if is_distributed else model
+                    
+                    state_dict_contiguous = {
+                        k: v.contiguous(memory_format=torch.contiguous_format) if v.dim() == 4 else v
+                        for k, v in raw_model.state_dict().items()
+                    }
+                    
                     ckpt = {
                         'epoch': epoch,
-                        'model_state_dict': model.module.state_dict() if is_distributed else model.state_dict(),
+                        'model_state_dict': state_dict_contiguous,
                         'ema_state_dict': ema_model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
                         'best_val': best_val,
-                        'mlflow_run_id': mlflow.active_run().info.run_id if mlflow.active_run() else None
+                        'mlflow_run_id': mlflow.active_run().info.run_id if mlflow.active_run() else None,
+                        'config': {
+                            'model_config': Config.model_config,
+                            'training_config': Config.training_config,
+                            'data_config': Config.data_config
+                        }
                     }
                     torch.save(ckpt, "checkpoint_latest.pth")
                     print(f"*** Full checkpoint saved at epoch {epoch} ***")
+                    
                     if mlflow.active_run():
                         mlflow.log_metric("best_val_loss", best_val, step=epoch)
             else:
                 no_improve += 1
                 if is_main_process:
-                    print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val Total: {val_metrics["val_total"]:.4f} | Val L1: {val_metrics["val_l1"]:.4f} | Patience: {no_improve}/{patience}', flush=True)
+                    print(f'Epoch {epoch:04d}/{epochs} | Train: {avg_loss:.4f} | Val Total: {val_metrics["val_total"]:.4f} | Val L1: {val_metrics["val_l1"]:.4f} | Std L1(t=0.5): {val_metrics["val_l1_standard"]:.4f} | Patience: {no_improve}/{patience}', flush=True)
                 
             if no_improve >= patience:
                 if is_main_process:
@@ -244,3 +265,5 @@ def train(model, optimizer, epochs, scheduler, dataloader_train, device='cpu',
                     scheduler.step(avg_loss)
                 else:
                     scheduler.step()
+                    
+    return ema_model.state_dict()

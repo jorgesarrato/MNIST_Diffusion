@@ -66,6 +66,35 @@ def load_sun_rgbd_subset(base_dir, n_read=-1):
         
     return rgb_paths, depth_paths
 
+def load_mysun_dataset(base_dir, n_read=-1):
+
+    image_dir = os.path.join(base_dir, 'image')
+    depth_dir = os.path.join(base_dir, 'depth')
+    
+    image_files = sorted([f for f in os.listdir(image_dir) if f.endswith('.jpg')])
+    
+    rgb_paths = []
+    depth_paths = []
+    
+    for img_file in image_files:
+        base_name = os.path.splitext(img_file)[0]
+        depth_file = base_name + '.png'
+        
+        rgb_path = os.path.join(image_dir, img_file)
+        depth_path = os.path.join(depth_dir, depth_file)
+        
+        if os.path.exists(depth_path):
+            rgb_paths.append(rgb_path)
+            depth_paths.append(depth_path)
+        else:
+            print(f"Warning: Dropped {img_file} because {depth_file} is missing.")
+            
+    if n_read > 0:
+        rgb_paths = rgb_paths[:n_read]
+        depth_paths = depth_paths[:n_read]
+        
+    return rgb_paths, depth_paths
+
 if __name__ == '__main__':
     from config import Config
     import os

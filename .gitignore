@@ -8,11 +8,14 @@ model_best.pth
 *.err
 *.out
 flow*.gif
+evol*.gif
+architecture*.gif
 *.pt
 *.png
 *simple.py
 *.zip
 *.json
+visualizations
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

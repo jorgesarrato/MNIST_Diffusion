@@ -50,18 +50,20 @@ class nyu_depth_dataset(torch.utils.data.Dataset):
     
     def __getitem__(self, idx):
         return self.depths_cache[idx], self.images_cache[idx]
-    
+    import torch
+
 class sun_depth_dataset(torch.utils.data.Dataset):
     def __init__(self, images_paths, depths_paths, cache_size=384, transform=None, log_depth=True):
         self.images_paths = images_paths
         self.depths_paths = depths_paths
         self.transform = transform
         self.log_depth = log_depth
+        self.cache_size = cache_size
         
-        self.standardize = v2.Compose([
-            v2.Resize(cache_size, interpolation=v2.InterpolationMode.BILINEAR, antialias=True),
-            v2.CenterCrop(cache_size) 
-        ])
+        if self.cache_size > 0:
+            self.normalize_scale = v2.Resize(cache_size, interpolation=v2.InterpolationMode.BILINEAR, antialias=True)
+        else:
+            self.normalize_scale = None
                 
         self.DEPTH_MIN, self.DEPTH_MAX = 0.7, 10.0
         self.LOG_MIN = math.log(self.DEPTH_MIN)
@@ -94,7 +96,7 @@ class sun_depth_dataset(torch.utils.data.Dataset):
         img_t = torch.from_numpy(img_np).permute(2, 0, 1) / 255.0
         depth_t = torch.from_numpy(depth_corrected).unsqueeze(0)
         
-        invalid_mask_t = (depth_t == 0.0).float()
+        valid_mask_t = (depth_t > 0.0).float()
         
         depth_t = torch.clamp(depth_t, self.DEPTH_MIN, self.DEPTH_MAX)
         
@@ -105,15 +107,17 @@ class sun_depth_dataset(torch.utils.data.Dataset):
             
         depth_t = depth_t * 2.0 - 1.0
         
-        stacked = torch.cat([img_t, depth_t, invalid_mask_t], dim=0)
-        stacked = self.standardize(stacked)
+        stacked = torch.cat([img_t, depth_t, valid_mask_t], dim=0)
+
+        if self.normalize_scale is not None:
+            stacked = self.normalize_scale(stacked)
         
         if self.transform is not None:
             stacked = self.transform(stacked)
-            
+
         img_out = stacked[:3]
         depth_out = stacked[3:4]
         
-        invalid_mask_out = (stacked[4:5] < 0.5).float()
+        valid_mask_out = (stacked[4:5] > 0.5).float()
         
-        return depth_out, img_out, invalid_mask_out
+        return depth_out, img_out, valid_mask_out

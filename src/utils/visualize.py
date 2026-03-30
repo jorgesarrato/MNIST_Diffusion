@@ -3,6 +3,7 @@ from matplotlib.animation import FuncAnimation
 import numpy as np
 import mlflow
 import torch
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 def visualize_flow_step(snapshot, downsample_factor=4, axes=None):
     if axes is None:
@@ -146,25 +147,29 @@ def process_rgb_for_plot(img_tensor):
         img = img_tensor.detach().cpu()
         if img.ndim == 4:
             img = img.squeeze(0)
-            
-        """mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        
-        img = img * std + mean"""
-        
         if img.shape[0] == 3:
             img = img.permute(1, 2, 0)
         img = img.numpy()
-        
     return img
 
-def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_factor=4, axes=None, cax=None, fig=None, log_depth=False):
+def unscale_depth(d, d_min=0.7, d_max=10.0, is_log=True):
+    if isinstance(d, torch.Tensor):
+        d = d.detach().cpu().squeeze().numpy().copy()
+    else:
+        d = np.array(d).copy().squeeze()
+        
+    d = (d + 1.0) / 2.0
+    
+    if is_log:
+        log_min, log_max = np.log(d_min), np.log(d_max)
+        d_log = d * (log_max - log_min) + log_min
+        return np.exp(d_log)
+    else:
+        return d * (d_max - d_min) + d_min
 
-    if axes is None:
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-
+def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, mask=None, downsample_factor=10, axes=None, cax_depth=None, cax_res=None, fig=None, log_depth=False, plot_quiver=True):
     depth_map = snapshot['image']
-    v_field = snapshot['v_field']
+    v_field = snapshot.get('v_field')
     rgb_condition = snapshot.get('label')
 
     axes[0].clear()
@@ -173,123 +178,253 @@ def visualize_depth_evolution_step_rgb(snapshot, gt_depth=None, downsample_facto
         rgb_img = np.clip(rgb_img, 0.0, 1.0)
         axes[0].imshow(rgb_img)
         axes[0].set_title("RGB Condition")
-    else:
-        axes[0].text(0.5, 0.5, "No Condition", ha='center')
     axes[0].axis('off')
 
-    def unscale_depth(d, d_min=0.7, d_max=10.0, is_log=True):
-        if isinstance(d, torch.Tensor):
-            d = d.detach().cpu().squeeze().numpy().copy()
-        else:
-            d = np.array(d).copy().squeeze()
-            
-        d = (d + 1.0) / 2.0
-        
-        if is_log:
-            log_min, log_max = np.log(d_min), np.log(d_max)
-            d_log = d * (log_max - log_min) + log_min
-            return np.exp(d_log)
-        else:
-            return d * (d_max - d_min) + d_min
-    
-    depth_map_np = unscale_depth(depth_map, is_log=log_depth)
+    cmap_jet = plt.get_cmap('jet').copy()
+    cmap_jet.set_bad('black')
+    cmap_seismic = plt.get_cmap('seismic').copy()
+    cmap_seismic.set_bad('black')
 
-    if gt_depth is not None:
+    depth_map_np = unscale_depth(depth_map, is_log=log_depth)
+    
+    gt_depth_np = None
+    mask_np = None
+    if gt_depth is not None and mask is not None:
         gt_depth_np = unscale_depth(gt_depth, is_log=log_depth)
-        vmin = min(depth_map_np.min(), gt_depth_np.min())
-        vmax = max(depth_map_np.max(), gt_depth_np.max())
+        mask_np = mask.detach().cpu().squeeze().numpy()
+
+        valid_pred = depth_map_np[mask_np > 0]
+        valid_gt = gt_depth_np[mask_np > 0]
+        
+        vmin_pred = np.nanmin(valid_pred) if len(valid_pred) > 0 else 0
+        vmax_pred = np.nanmax(valid_pred) if len(valid_pred) > 0 else 10
+        vmin_gt = np.nanmin(valid_gt) if len(valid_gt) > 0 else 0
+        vmax_gt = np.nanmax(valid_gt) if len(valid_gt) > 0 else 10
+        
+        vmin = min(vmin_pred, vmin_gt)
+        vmax = max(vmax_pred, vmax_gt)
+        
+        if vmin == vmax:
+            vmax += 1e-5
+            vmin -= 1e-5
+        
+        gt_masked = np.where(mask_np > 0, gt_depth_np, np.nan)
+        residuals = np.where(mask_np > 0, depth_map_np - gt_depth_np, np.nan)
     else:
-        vmin = depth_map_np.min()
-        vmax = depth_map_np.max()
+        vmin = np.nanmin(depth_map_np)
+        vmax = np.nanmax(depth_map_np)
+        if vmin == vmax:
+            vmax += 1e-5
+            vmin -= 1e-5
+        gt_masked = None
+        residuals = np.zeros_like(depth_map_np)
 
     axes[1].clear()
-    if gt_depth is not None:
-        axes[1].imshow(gt_depth_np, cmap='inferno', origin='upper', vmin=vmin, vmax=vmax)
-        axes[1].set_title("Ground Truth Depth (m)")
-    else:
-        axes[1].text(0.5, 0.5, "No GT Depth Provided", ha='center')
+    if gt_masked is not None:
+        axes[1].imshow(gt_masked, cmap=cmap_jet, origin='upper', vmin=vmin, vmax=vmax)
+        axes[1].set_title("True Depth (m)")
     axes[1].axis('off')
 
     axes[2].clear()
-    im_pred = axes[2].imshow(depth_map_np, cmap='inferno', origin='upper', vmin=vmin, vmax=vmax)
-
-    if v_field is not None:
-        def block_mean(ar, fact):
-            h, w = ar.shape
-            h_crop = (h // fact) * fact
-            w_crop = (w // fact) * fact
-            ar_cropped = ar[:h_crop, :w_crop]
-            return ar_cropped.reshape(h_crop // fact, fact, w_crop // fact, fact).mean(axis=(1, 3))
-
+    im_pred = axes[2].imshow(depth_map_np, cmap=cmap_jet, origin='upper', vmin=vmin, vmax=vmax)
+    
+    if plot_quiver and v_field is not None:
         if isinstance(v_field, torch.Tensor):
             v_field = v_field.detach().cpu().squeeze().numpy()
+            
+        def block_mean(ar, fact):
+            h, w = ar.shape
+            h_crop, w_crop = (h // fact) * fact, (w // fact) * fact
+            return ar[:h_crop, :w_crop].reshape(h_crop // fact, fact, w_crop // fact, fact).mean(axis=(1, 3))
 
         v_field_small = block_mean(v_field, downsample_factor)
-        dy, dx = np.gradient(v_field_small)
-
+        dy, dx = np.gradient(v_field_small) 
+        
         h_s, w_s = v_field_small.shape
-        y = np.arange(h_s) * downsample_factor + downsample_factor / 2 - 0.5
-        x = np.arange(w_s) * downsample_factor + downsample_factor / 2 - 0.5
+        y = np.arange(h_s) * downsample_factor + downsample_factor / 2
+        x = np.arange(w_s) * downsample_factor + downsample_factor / 2
         X, Y = np.meshgrid(x, y)
 
-        axes[2].quiver(X, Y, dx, -dy, color='white', alpha=0.6, scale=None, width=0.005, pivot='mid')
+        axes[2].quiver(X, Y, dx, -dy, color='white', alpha=0.5, scale=None, width=0.003, pivot='mid')
 
-    axes[2].set_title(f'Depth Reconstruction (t = {snapshot["t"]:.2f})')
+    axes[2].set_title(f'Pred Depth (t = {snapshot["t"]:.2f})')
     axes[2].axis('off')
 
-    if fig is not None and cax is not None:
-        cax.clear()
-        fig.colorbar(im_pred, cax=cax, orientation='vertical')
+    axes[3].clear()
+    max_res = max(abs(vmin), abs(vmax))
+    im_res = axes[3].imshow(residuals, cmap=cmap_seismic, origin='upper', vmin=-max_res, vmax=max_res)
+    axes[3].set_title("Residuals (Pred - True)")
+    axes[3].axis('off')
+
+    if fig is not None and cax_depth is not None and cax_res is not None:
+        cax_depth.clear()
+        cax_res.clear()
+        fig.colorbar(im_pred, cax=cax_depth, label="Depth (m)")
+        fig.colorbar(im_res, cax=cax_res, label="Error (m)")
 
     return axes
 
-def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1, downsample_factor=10, gt_depth=None, log_depth=False):
+def create_depth_flow_animation(snapshots, filename='depth_evolution.gif', timing_mode='linear', n_steps=-1, downsample_factor=10, gt_depth=None, mask=None, log_depth=False, plot_quiver=True):
     total_snaps = len(snapshots)
+    if total_snaps == 0:
+        print("Warning: Snapshots list is empty. Skipping animation.")
+        return None
+        
     if (n_steps <= 0) or (n_steps > total_snaps):
         n_steps = total_snaps
 
     if timing_mode == 'linear':
         indices = [int(i * total_snaps / n_steps) for i in range(n_steps)]
-    elif timing_mode == 'quadratic':
-        indices = [int(i**2 * total_snaps / n_steps**2) for i in range(n_steps)]
-    elif timing_mode == 'inv_quadratic':
-        indices = [int((i / (n_steps - 1))**0.5 * (total_snaps - 1)) for i in range(n_steps)]
     elif timing_mode == 'logarithmic':
-        raw = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps, dtype=int)
-        indices = [int(i) for i in reversed(raw)]
+        raw = total_snaps - np.logspace(0, np.log10(max(1, total_snaps)), n_steps)
+        indices = sorted([int(max(0, min(total_snaps - 1, i))) for i in raw])
     else:
-        raise ValueError(f"Timing mode {timing_mode} not supported.")
+        indices = [int(i * total_snaps / n_steps) for i in range(n_steps)]
 
-    indices = [min(i, total_snaps - 1) for i in indices]
+    indices = [min(max(i, 0), total_snaps - 1) for i in indices]
     selected_snapshots = [snapshots[i] for i in indices]
 
-    fig = plt.figure(figsize=(16, 5), dpi=100)
-    gs = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 0.03], wspace=0.05)
+    fig = plt.figure(figsize=(22, 5), dpi=100)
+    gs = fig.add_gridspec(1, 7, width_ratios=[1, 1, 1, 1, 0.03, 0.05, 0.03], wspace=0.15)
     
-    ax0 = fig.add_subplot(gs[0])
-    ax1 = fig.add_subplot(gs[1])
-    ax2 = fig.add_subplot(gs[2])
-    cax = fig.add_subplot(gs[3])
-    axes = [ax0, ax1, ax2]
+    axes = [fig.add_subplot(gs[i]) for i in range(4)]
+    cax_depth = fig.add_subplot(gs[4])
+    cax_res = fig.add_subplot(gs[6])
     
     def update(i):
-        visualize_depth_evolution_step_rgb(
-            selected_snapshots[i], 
-            gt_depth=gt_depth, 
-            downsample_factor=downsample_factor, 
-            axes=axes, 
-            cax=cax, 
-            fig=fig,
-            log_depth=log_depth
-        )
+        try:
+            visualize_depth_evolution_step_rgb(
+                selected_snapshots[i], gt_depth=gt_depth, mask=mask, 
+                downsample_factor=downsample_factor, axes=axes, 
+                cax_depth=cax_depth, cax_res=cax_res, fig=fig, 
+                log_depth=log_depth, plot_quiver=plot_quiver
+            )
+        except Exception as e:
+            import traceback
+            print(f"\nCRITICAL ANIMATION ERROR AT FRAME {i}:")
+            traceback.print_exc()
+            raise e
 
     anim = FuncAnimation(fig, update, frames=len(selected_snapshots), interval=100)
     anim.save(filename, writer='pillow')
     plt.close()
     
-    print(f"Saved animation to {filename}")
+    if mlflow.active_run():
+        mlflow.log_artifact(filename)
+    return filename
+
+def plot_uncertainty_stats(image, gt_depth, mask, median_depth, std_depth, filename, log_depth=False):
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+    
+    rgb_img = np.clip(process_rgb_for_plot(image), 0, 1)
+    axes[0].imshow(rgb_img)
+    axes[0].set_title("RGB Image")
+    axes[0].axis('off')
+    
+    gt_np = unscale_depth(gt_depth, is_log=log_depth)
+    median_np = unscale_depth(median_depth, is_log=log_depth)
+    std_np = unscale_depth(std_depth, is_log=log_depth) 
+    
+    mask_np = mask.detach().cpu().squeeze().numpy()
+    
+    cmap_jet = plt.get_cmap('jet').copy()
+    cmap_jet.set_bad('black')
+    
+    gt_masked = np.where(mask_np > 0, gt_np, np.nan)
+    median_masked = np.where(mask_np > 0, median_np, np.nan)
+    std_masked = np.where(mask_np > 0, std_np, np.nan)
+    
+    vmin = min(np.nanmin(gt_masked), np.nanmin(median_masked))
+    vmax = max(np.nanmax(gt_masked), np.nanmax(median_masked))
+    
+    axes[1].imshow(gt_masked, cmap=cmap_jet, vmin=vmin, vmax=vmax)
+    axes[1].set_title("True Depth")
+    axes[1].axis('off')
+    
+    im_med = axes[2].imshow(median_masked, cmap=cmap_jet, vmin=vmin, vmax=vmax)
+    axes[2].set_title("Median Predicted Depth")
+    axes[2].axis('off')
+    
+    divider2 = make_axes_locatable(axes[2])
+    cax2 = divider2.append_axes("right", size="5%", pad=0.05)
+    fig.colorbar(im_med, cax=cax2)
+    
+    im_std = axes[3].imshow(std_masked, cmap='plasma')
+    axes[3].set_title("1-Sigma Uncertainty")
+    axes[3].axis('off')
+    
+    divider3 = make_axes_locatable(axes[3])
+    cax3 = divider3.append_axes("right", size="5%", pad=0.05)
+    fig.colorbar(im_std, cax=cax3)
+    
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
     
     if mlflow.active_run():
         mlflow.log_artifact(filename)
 
-    return filename
+def plot_calibration_curve(all_samples, all_gts, all_masks, filename):
+    num_imgs = all_samples.shape[0]
+    num_samples = all_samples.shape[1]
+    
+    collected_samples = []
+    collected_gts = []
+
+    for i in range(num_imgs):
+        mask_i = all_masks[i] > 0
+        samples_i = all_samples[i, :, mask_i] 
+        gt_i = all_gts[i, mask_i]
+        
+        collected_samples.append(samples_i)
+        collected_gts.append(gt_i)
+
+    samples_flat = np.concatenate(collected_samples, axis=0)
+    gt_flat = np.concatenate(collected_gts, axis=0)
+    total_valid_pixels = samples_flat.shape[0]
+    
+    percentiles = np.linspace(1, 99, 99)
+    expected_probs = percentiles / 100.0
+    
+    quantiles = np.percentile(samples_flat, percentiles, axis=1)
+    observed_probs = np.mean(gt_flat[None, :] <= quantiles, axis=1)
+
+    area_error = np.trapz(np.abs(expected_probs - observed_probs), expected_probs)
+
+    if mlflow.active_run():
+        mlflow.log_metric("calibration_area_error", float(area_error))
+
+    data_filename = filename.replace(".png", "_data.npz")
+    np.savez(data_filename, expected=expected_probs, observed=observed_probs)
+    
+    plt.figure(figsize=(7, 7))
+    plt.plot(expected_probs, observed_probs, label="Model Calibration", color='blue', linewidth=2)
+    plt.plot([0, 1], [0, 1], linestyle='--', color='red', alpha=0.6, label="Ideal (Perfect Calibration)")
+    
+    textstr = '\n'.join((
+        f'Images: {num_imgs}',
+        f'Samples/Pixel: {num_samples}',
+        f'Valid Pixels: {total_valid_pixels:,}',
+        f'Calibration Error: {area_error:.4f}'
+    ))
+    props = dict(boxstyle='round', facecolor='white', alpha=0.8)
+    plt.text(0.55, 0.35, textstr, transform=plt.gca().transAxes, fontsize=10,
+             verticalalignment='top', bbox=props)
+    
+    plt.xlabel("Predicted Quantile (Confidence Level)")
+    plt.ylabel("Observed Frequency of Ground Truth")
+    plt.title("Reliability Diagram: Depth Posterior Calibration")
+    plt.legend(loc="upper left")
+    plt.grid(True, alpha=0.3)
+    
+    plt.text(0.05, 0.9, "Under-confident (Above line)", color='gray', fontsize=9)
+    plt.text(0.65, 0.05, "Over-confident (Below line)", color='gray', fontsize=9)
+    
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    
+    if mlflow.active_run():
+        mlflow.log_artifact(filename)
+
+    return expected_probs, observed_probs

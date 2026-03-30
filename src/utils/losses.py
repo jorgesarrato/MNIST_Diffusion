@@ -89,13 +89,13 @@ class ScaleInvariantLoss(nn.Module):
         return term1 - self.lam * term2
     
 class FlowMatchingLoss(nn.Module):
-
     def __init__(
         self,
         base_type="L1",
         grad_weight=0.5,
         si_weight=0.0,
         edge_weight=0.0,
+        x1_weight=1.0,
         log_depth=False
     ):
         super().__init__()
@@ -104,26 +104,35 @@ class FlowMatchingLoss(nn.Module):
         self.grad_weight = grad_weight
         self.si_weight = si_weight
         self.edge_weight = edge_weight
+        self.x1_weight = x1_weight
 
         if base_type == "MSE":
             self.base_loss = nn.MSELoss(reduction="none")
         else:
-            self.base_loss = nn.SmoothL1Loss(reduction="none", beta=0.05)
+            self.base_loss = nn.SmoothL1Loss(reduction="none", beta=0.1)
 
-        self.si_loss = ScaleInvariantLoss(lam=si_weight, log_depth=log_depth)
+        self.si_loss = ScaleInvariantLoss(lam=0.5, log_depth=log_depth)
 
     def forward(self, v_pred, v_target, x1_pred, x_target, image, mask):
-
         valid_pixels = torch.clamp(mask.sum(dim=(1, 2, 3)), min=1e-6)
 
         if self.base_type == "SI":
-            base = self.si_loss(x1_pred, x_target, mask)
+            base_v = 0.0 
         else:
             base_raw = self.base_loss(v_pred, v_target) * mask
-            base = base_raw.sum(dim=(1, 2, 3)) / valid_pixels
+            base_v = base_raw.sum(dim=(1, 2, 3)) / valid_pixels
 
-        grad_v = compute_gradient_loss(v_pred, v_target, mask)
-        total_loss = base + self.grad_weight * grad_v
+        if self.x1_weight > 0 and self.base_type != "SI":
+            x1_raw = self.base_loss(x1_pred, x_target) * mask
+            base_x1 = x1_raw.sum(dim=(1, 2, 3)) / valid_pixels
+        else:
+            base_x1 = 0.0
+
+        total_loss = base_v + (self.x1_weight * base_x1)
+
+        if self.grad_weight > 0:
+            grad_v = compute_gradient_loss(x1_pred, x_target, mask) 
+            total_loss = total_loss + self.grad_weight * grad_v
 
         if self.edge_weight > 0:
             edge = compute_edge_aware_loss(x1_pred, x_target, image, mask)

@@ -3,11 +3,11 @@
 #SBATCH -J FM
 #SBATCH -n 1
 #SBATCH --cpus-per-task=5
-#SBATCH -t 0-24:00:00
+#SBATCH -t 0-36:00:00
 #SBATCH -o %j.out
 #SBATCH -e %j.err
 #SBATCH --gres gpu:2 
-#SBATCH --mem 128G
+#SBATCH --mem 32G
 #SBATCH -D .
 #############################
 

@@ -184,3 +184,70 @@ def save_full_flow_evolution(model, label, device='cpu', num_steps=50, patch_siz
         snapshots.append(snapshot)
 
     return snapshots
+
+def generate_fast_samples(model, label, device='cpu', num_steps=50, patch_size=128, stride=64, guidance_scale=1.5, max_batch_size=16, num_samples=100):
+    m = model.module if hasattr(model, 'module') else model
+    m.eval()
+
+    if label.ndim == 3:
+        label = label.unsqueeze(0)
+    label = label.to(device, dtype=torch.float32)
+    
+    _, c, h, w = label.shape
+    pad_h = (stride - (h - patch_size) % stride) % stride
+    pad_w = (stride - (w - patch_size) % stride) % stride
+    label_padded = F.pad(label, (0, pad_w, 0, pad_h), mode='reflect')
+    
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+    label_padded = (label_padded - imagenet_mean) / imagenet_std
+
+    coords = [(y, x) for y in range(0, label_padded.shape[2] - patch_size + 1, stride) 
+                     for x in range(0, label_padded.shape[3] - patch_size + 1, stride)]
+                     
+    w1d = torch.cat([torch.linspace(0.1, 1.0, patch_size // 2), torch.linspace(1.0, 0.1, patch_size // 2)])
+    blend_window = (w1d.unsqueeze(0) * w1d.unsqueeze(1)).view(1, 1, patch_size, patch_size).to(device)
+
+    def get_v_batched(x_patches, t_val, label_patches):
+        B = x_patches.shape[0]
+        v_out = torch.zeros_like(x_patches)
+        t_tensor = torch.full((B,), t_val, device=device, dtype=torch.float32)
+        
+        with torch.no_grad(), torch.amp.autocast('cuda'):
+            for i in range(0, B, max_batch_size):
+                end = min(i + max_batch_size, B)
+                if guidance_scale > 1.0:
+                    mask_keep = torch.zeros(end - i, dtype=torch.bool, device=device)
+                    mask_drop = torch.ones(end - i, dtype=torch.bool, device=device)
+                    v_cond = m(x_patches[i:end], t_tensor[i:end], label_patches[i:end], drop_mask=mask_keep)
+                    v_uncond = m(x_patches[i:end], t_tensor[i:end], label_patches[i:end], drop_mask=mask_drop)
+                    v_out[i:end] = v_uncond + guidance_scale * (v_cond - v_uncond)
+                else:
+                    v_out[i:end] = m(x_patches[i:end], t_tensor[i:end], label_patches[i:end])
+        return v_out
+
+    l_patches = torch.cat([label_padded[:, :, y:y+patch_size, x:x+patch_size] for y, x in coords], dim=0)
+    
+    final_samples = []
+    dt = 1.0 / num_steps
+    
+    with torch.no_grad():
+        for _ in range(num_samples):
+            x_full = torch.randn(1, 1, label_padded.shape[2], label_padded.shape[3], device=device)
+            for i in range(num_steps):
+                t_val = i / num_steps
+                x_patches = torch.cat([x_full[:, :, y:y+patch_size, x:x+patch_size] for y, x in coords], dim=0)
+                v1_patches = get_v_batched(x_patches, t_val, l_patches)
+                
+                v1_full = torch.zeros_like(x_full)
+                counts = torch.zeros_like(x_full)
+                for idx, (y, x) in enumerate(coords):
+                    v1_full[:, :, y:y+patch_size, x:x+patch_size] += v1_patches[idx:idx+1] * blend_window
+                    counts[:, :, y:y+patch_size, x:x+patch_size] += blend_window
+                v1_full /= torch.clamp(counts, min=1e-6)
+                
+                x_full = x_full + v1_full * dt
+            
+            final_samples.append(x_full[:, :, :h, :w].cpu().squeeze())
+
+    return torch.stack(final_samples)
