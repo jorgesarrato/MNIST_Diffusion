@@ -364,29 +364,31 @@ def plot_uncertainty_stats(image, gt_depth, mask, median_depth, std_depth, filen
     if mlflow.active_run():
         mlflow.log_artifact(filename)
 
-def plot_calibration_curve(all_samples, all_gts, all_masks, filename):
-    num_imgs = all_samples.shape[0]
-    num_samples = all_samples.shape[1]
+def plot_calibration_curve(all_samples_list, all_gts_list, all_masks_list, filename):
+    num_imgs = len(all_samples_list)
+    num_samples = all_samples_list[0].shape[0]
     
     collected_samples = []
     collected_gts = []
 
     for i in range(num_imgs):
-        mask_i = all_masks[i] > 0
-        samples_i = all_samples[i, :, mask_i] 
-        gt_i = all_gts[i, mask_i]
+        mask_i = all_masks_list[i] > 0
         
-        collected_samples.append(samples_i)
+        samples_i = all_samples_list[i][:, mask_i] 
+        gt_i = all_gts_list[i][mask_i]
+        
+        collected_samples.append(samples_i.T) 
         collected_gts.append(gt_i)
 
-    samples_flat = np.concatenate(collected_samples, axis=0)
-    gt_flat = np.concatenate(collected_gts, axis=0)
+    samples_flat = np.concatenate(collected_samples, axis=0) 
+    gt_flat = np.concatenate(collected_gts, axis=0)         
     total_valid_pixels = samples_flat.shape[0]
     
     percentiles = np.linspace(1, 99, 99)
     expected_probs = percentiles / 100.0
     
-    quantiles = np.percentile(samples_flat, percentiles, axis=1)
+    quantiles = np.percentile(samples_flat, percentiles, axis=1) 
+    
     observed_probs = np.mean(gt_flat[None, :] <= quantiles, axis=1)
 
     area_error = np.trapz(np.abs(expected_probs - observed_probs), expected_probs)

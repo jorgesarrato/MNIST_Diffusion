@@ -70,7 +70,9 @@ def run_distributed_visualizations(model, test_dataset, device, local_rank=0, wo
             all_masks_list.append(mask.squeeze().cpu().numpy())
 
     np.savez(f"visualizations/temp_calib_rank_{local_rank}.npz", 
-             samples=all_samples_list, gts=all_gts_list, masks=all_masks_list)
+             samples=np.array(all_samples_list, dtype=object), 
+             gts=np.array(all_gts_list, dtype=object), 
+             masks=np.array(all_masks_list, dtype=object))
 
     if world_size > 1:
         dist.barrier()
@@ -88,11 +90,7 @@ def run_distributed_visualizations(model, test_dataset, device, local_rank=0, wo
             os.remove(f"visualizations/temp_calib_rank_{r}.npz")
 
         if combined_samples:
-            all_samples = np.stack(combined_samples)
-            all_gts = np.stack(combined_gts)
-            all_masks = np.stack(combined_masks)
-            
-            plot_calibration_curve(all_samples, all_gts, all_masks, "visualizations/calibration_curve.png")
+            plot_calibration_curve(combined_samples, combined_gts, combined_masks, "visualizations/calibration_curve.png")
 
         if mlflow.active_run():
             mlflow.log_artifacts("visualizations/", artifact_path="visualizations")

@@ -11,6 +11,10 @@
 #SBATCH -D .
 #############################
 
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 source mnist_env/bin/activate
 
 if [ -n "$SLURM_GPUS_ON_NODE" ]; then
@@ -27,8 +31,8 @@ echo "Detected $NUM_GPUS GPUs requested."
 if [ "$NUM_GPUS" -gt 1 ]; then
     echo "Launching with torchrun for $NUM_GPUS GPUs (Distributed Mode)..."
     torchrun --nproc_per_node=$NUM_GPUS \
-             /net/deimos/scratch/jsarrato/MNIST_Diffusion/src/run_experiment.py
+             "$PROJECT_ROOT/src/run_experiment.py" "$@"
 else
     echo "Launching with standard python (Single GPU Mode)..."
-    python -u /net/deimos/scratch/jsarrato/MNIST_Diffusion/src/run_experiment.py
+    python -u "$PROJECT_ROOT/src/run_experiment.py" "$@"
 fi
