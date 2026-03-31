@@ -69,10 +69,20 @@ def run_distributed_visualizations(model, test_dataset, device, local_rank=0, wo
             all_gts_list.append(gt_depth.squeeze().cpu().numpy())
             all_masks_list.append(mask.squeeze().cpu().numpy())
 
+    # Force saving as object
+    samples_arr = np.empty(len(all_samples_list), dtype=object)
+    gts_arr = np.empty(len(all_gts_list), dtype=object)
+    masks_arr = np.empty(len(all_masks_list), dtype=object)
+
+    for i in range(len(all_samples_list)):
+        samples_arr[i] = all_samples_list[i]
+        gts_arr[i] = all_gts_list[i]
+        masks_arr[i] = all_masks_list[i]
+
     np.savez(f"visualizations/temp_calib_rank_{local_rank}.npz", 
-             samples=np.array(all_samples_list, dtype=object), 
-             gts=np.array(all_gts_list, dtype=object), 
-             masks=np.array(all_masks_list, dtype=object))
+             samples=samples_arr, 
+             gts=gts_arr, 
+             masks=masks_arr)
 
     if world_size > 1:
         dist.barrier()
