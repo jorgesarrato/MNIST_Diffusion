@@ -57,7 +57,6 @@ def create_superimposed_calibration(run_names, run_data, output_path):
     for name, data in zip(run_names, run_data):
         if data is not None and 'expected' in data:
             area_error = np.trapz(np.abs(data['observed'] - data['expected']), data['expected'])
-            
             plt.plot(data['expected'], data['observed'], label=f"{name} (AE: {area_error:.3f})", linewidth=2)
             
     plt.plot([0, 1], [0, 1], linestyle='--', color='red', alpha=0.6, label="Ideal")
@@ -88,12 +87,24 @@ def create_model_comparison_grid(rgb, gt_metric, mask, models_data, sample_idx, 
     
     gt_np[~valid_mask] = np.nan
     
+    # Dynamically calculate the smallest 99th percentile std across all models
+    std_p99_list = []
+    for run_name, data in models_data.items():
+        std_np = data['std'].squeeze().astype(float)
+        if valid_mask.any():
+            std_p99_list.append(np.percentile(std_np[valid_mask], 99))
+            
+    std_vmax = min(std_p99_list) if std_p99_list else 1.5
+
     axes[0, 0].imshow(rgb.permute(1, 2, 0).cpu().numpy())
     axes[0, 0].set_title("RGB Image")
     
     axes[0, 1].imshow(gt_np, cmap=cmap_jet, vmin=vmin, vmax=vmax)
     axes[0, 1].set_title(f"Ground Truth Depth (m)\nScale: {vmin:.1f}m - {vmax:.1f}m")
+    
     axes[0, 2].axis('off')
+    axes[0, 2].text(0.5, 0.5, f"Shared Uncertainty Scale:\n0.00m - {std_vmax:.2f}m", 
+                    fontsize=12, ha='center', va='center', wrap=True)
     
     for i, (run_name, data) in enumerate(models_data.items()):
         row = i + 1
@@ -110,7 +121,8 @@ def create_model_comparison_grid(rgb, gt_metric, mask, models_data, sample_idx, 
         std_np = data['std'].squeeze().astype(float)
         std_np[~valid_mask] = np.nan
         
-        im_std = axes[row, 2].imshow(std_np, cmap=cmap_inf, vmin=0.0, vmax=1.5)
+        # Apply the new dynamically calculated saturation limit
+        im_std = axes[row, 2].imshow(std_np, cmap=cmap_inf, vmin=0.0, vmax=std_vmax)
         axes[row, 2].set_title("Uncertainty Std (m)")
         plt.colorbar(im_std, ax=axes[row, 2], fraction=0.046, pad=0.04)
         
@@ -262,22 +274,19 @@ def main():
                     calib_out_png = f"comparisons/{run_name}_calib.png"
                     expected, observed = plot_calibration_curve(combined_samples, combined_gts, combined_masks, calib_out_png)
                     
-                    # Compute Golden Metrics!
                     img_metrics = []
                     for i in range(len(combined_samples)):
-                        pred_median = np.median(combined_samples[i], axis=0) # Get pixel-wise median across the 100 passes
+                        pred_median = np.median(combined_samples[i], axis=0)
                         res = compute_depth_metrics(pred_median, combined_gts[i], combined_masks[i])
                         if res: img_metrics.append(res)
                         
                     avg_metrics = {k: np.mean([m[k] for m in img_metrics]) for k in img_metrics[0].keys()}
                     
-                    # Log Metrics to MLflow
                     for k, v in avg_metrics.items():
                         client.log_metric(run_id, f"eval_50_{k}", float(v))
                         
                     final_metrics_table[run_name] = avg_metrics
                     
-                    # Save both Curve Data and Metrics locally
                     np.savez(local_calib_path, expected=expected, observed=observed, **avg_metrics)
                     calib_data_all.append({'expected': expected, 'observed': observed})
                 
@@ -351,7 +360,6 @@ def main():
             if len(gif_paths) == len(run_names) and len(gif_paths) > 0:
                 combine_gifs_vertically(run_names, gif_paths, f"comparisons/combined_evolution_{ii}.gif")
         
-        # Print Final Markdown Table
         if final_metrics_table:
             print("\n" + "="*85)
             print(f"{'Model (DINOv2 Variants)':<35} | {'Abs Rel':<7} | {'RMSE':<7} | {'RMSE log':<8} | {'δ<1.25':<7} | {'δ<1.25²':<7} | {'δ<1.25³':<7}")
