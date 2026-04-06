@@ -56,7 +56,7 @@ def create_superimposed_calibration(run_names, run_data, output_path):
     plt.figure(figsize=(8, 8))
     for name, data in zip(run_names, run_data):
         if data is not None and 'expected' in data:
-            area_error = np.trapz(np.abs(data['observed'] - data['expected']), data['expected'])
+            area_error = np.trapezoid(np.abs(data['observed'] - data['expected']), data['expected'])
             plt.plot(data['expected'], data['observed'], label=f"{name} (AE: {area_error:.3f})", linewidth=2)
             
     plt.plot([0, 1], [0, 1], linestyle='--', color='red', alpha=0.6, label="Ideal")
@@ -130,16 +130,63 @@ def create_model_comparison_grid(rgb, gt_metric, mask, models_data, sample_idx, 
     plt.savefig(out_path)
     plt.close()
 
-def combine_gifs_vertically(run_names, gif_paths, output_path):
+def combine_gifs_vertically(run_names, gif_paths, output_path, timing_mode='logarithmic', n_steps=100):
     import imageio
-    readers = [imageio.get_reader(p) for p in gif_paths]
-    frames_list = [[frame for frame in r] for r in readers]
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from PIL import Image
     
-    num_frames = min(len(f) for f in frames_list)
+    print(f"Combining {len(gif_paths)} GIFs vertically with {timing_mode} pacing and row labels...")
+    
+    model_gifs = [imageio.mimread(path) for path in gif_paths]
+    
+    total_snaps = min(len(frames) for frames in model_gifs)
+    
+    if timing_mode == 'logarithmic':
+        raw_indices = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps)
+        indices = sorted(list(set([int(max(0, min(total_snaps - 1, i))) for i in raw_indices])))
+        
+        while len(indices) < n_steps:
+            indices.append(total_snaps - 1)
+    else:
+        indices = list(range(total_snaps))
+        
+    label_imgs = []
+    frame_h = model_gifs[0][0].shape[0]  
+    label_w = 200                        
+    
+    for name in run_names:
+        fig = plt.figure(figsize=(label_w / 100.0, frame_h / 100.0), dpi=100)
+        fig.patch.set_facecolor('white') 
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, name, fontsize=14, ha='center', va='center', wrap=True)
+        ax.axis('off')
+        fig.canvas.draw()
+        
+        lbl_img_rgba = np.asarray(fig.canvas.buffer_rgba())
+        lbl_img = lbl_img_rgba[..., :3]
+        
+        if lbl_img.shape[0] != frame_h or lbl_img.shape[1] != label_w:
+            lbl_img = np.array(Image.fromarray(lbl_img).resize((label_w, frame_h)))
+            
+        label_imgs.append(lbl_img)
+        plt.close(fig)
+
     combined_frames = []
     
-    for i in range(num_frames):
-        combined_img = np.concatenate([frames[i] for frames in frames_list], axis=0)
+    for idx in indices:
+        row_images = []
+        
+        for i, frames in enumerate(model_gifs):
+            frame = frames[idx]
+            
+            if frame.shape[-1] == 4:
+                frame = frame[..., :3]
+                
+            row_with_label = np.concatenate([label_imgs[i], frame], axis=1)
+            row_images.append(row_with_label)
+            
+        combined_img = np.concatenate(row_images, axis=0)
         combined_frames.append(combined_img)
         
     imageio.mimsave(output_path, combined_frames, fps=10, loop=0)
