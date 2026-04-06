@@ -12,6 +12,7 @@ evol*.gif
 architecture*.gif
 *.pt
 *.png
+!comparisons/*.png
 *simple.py
 *.zip
 *.json
