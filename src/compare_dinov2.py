@@ -144,12 +144,9 @@ def combine_gifs_vertically(run_names, gif_paths, output_path, timing_mode='loga
     
     if timing_mode == 'logarithmic':
         raw_indices = total_snaps - np.logspace(0, np.log10(total_snaps), n_steps)
-        indices = sorted(list(set([int(max(0, min(total_snaps - 1, i))) for i in raw_indices])))
-        
-        while len(indices) < n_steps:
-            indices.append(total_snaps - 1)
+        indices = sorted([int(max(0, min(total_snaps - 1, i))) for i in raw_indices])
     else:
-        indices = list(range(total_snaps))
+        indices = [int(i * (total_snaps - 1) / (n_steps - 1)) for i in range(n_steps)]
         
     label_imgs = []
     frame_h = model_gifs[0][0].shape[0]  
@@ -405,7 +402,7 @@ def main():
             create_model_comparison_grid(rgb_label, gt_metric, mask, models_data, ii, f"comparisons/grid_sample_{ii}.png")
             
             if len(gif_paths) == len(run_names) and len(gif_paths) > 0:
-                combine_gifs_vertically(run_names, gif_paths, f"comparisons/combined_evolution_{ii}.gif")
+                combine_gifs_vertically(run_names, gif_paths, f"comparisons/combined_evolution_{ii}.gif", n_steps=100, timing_mode='logarithmic')
         
         if final_metrics_table:
             print("\n" + "="*85)
