@@ -312,7 +312,7 @@ def main():
                         )
                         from utils.visualize import create_depth_flow_animation
                         create_depth_flow_animation(
-                            snapshots, filename=gif_path, n_steps=50, 
+                            snapshots, filename=gif_path, n_steps=100, 
                             timing_mode='logarithmic', 
                             gt_depth=gt_depth.unsqueeze(0), mask=mask, 
                             log_depth=model_is_log, plot_quiver=False
