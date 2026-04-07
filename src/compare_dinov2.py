@@ -136,7 +136,7 @@ def combine_gifs_vertically(run_names, gif_paths, output_path, timing_mode='loga
     import matplotlib.pyplot as plt
     from PIL import Image
     
-    print(f"Combining {len(gif_paths)} GIFs vertically with {timing_mode} pacing and row labels...")
+    print(f"Combining {len(gif_paths)} GIFs vertically with {timing_mode} pacing and top titles...")
     
     model_gifs = [imageio.mimread(path) for path in gif_paths]
     
@@ -148,31 +148,37 @@ def combine_gifs_vertically(run_names, gif_paths, output_path, timing_mode='loga
     else:
         indices = [int(i * (total_snaps - 1) / (n_steps - 1)) for i in range(n_steps)]
         
-    label_imgs = []
-    frame_h = model_gifs[0][0].shape[0]  
-    label_w = 200                        
+    title_imgs = []
+    
+    frame_h, frame_w = model_gifs[0][0].shape[:2]  
+    
+    title_h = 50                        
     
     for name in run_names:
-        fig = plt.figure(figsize=(label_w / 100.0, frame_h / 100.0), dpi=100)
+        fig = plt.figure(figsize=(frame_w / 100.0, title_h / 100.0), dpi=100)
         fig.patch.set_facecolor('white') 
         ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, name, fontsize=14, ha='center', va='center', wrap=True)
+        
+        ax.text(0.5, 0.5, name, fontsize=16, fontweight='bold', 
+                ha='center', va='center')
         ax.axis('off')
+        
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         fig.canvas.draw()
         
         lbl_img_rgba = np.asarray(fig.canvas.buffer_rgba())
         lbl_img = lbl_img_rgba[..., :3]
         
-        if lbl_img.shape[0] != frame_h or lbl_img.shape[1] != label_w:
-            lbl_img = np.array(Image.fromarray(lbl_img).resize((label_w, frame_h)))
+        if lbl_img.shape[0] != title_h or lbl_img.shape[1] != frame_w:
+            lbl_img = np.array(Image.fromarray(lbl_img).resize((frame_w, title_h)))
             
-        label_imgs.append(lbl_img)
+        title_imgs.append(lbl_img)
         plt.close(fig)
 
     combined_frames = []
     
     for idx in indices:
-        row_images = []
+        row_blocks = []
         
         for i, frames in enumerate(model_gifs):
             frame = frames[idx]
@@ -180,10 +186,10 @@ def combine_gifs_vertically(run_names, gif_paths, output_path, timing_mode='loga
             if frame.shape[-1] == 4:
                 frame = frame[..., :3]
                 
-            row_with_label = np.concatenate([label_imgs[i], frame], axis=1)
-            row_images.append(row_with_label)
+            block_with_title = np.concatenate([title_imgs[i], frame], axis=0)
+            row_blocks.append(block_with_title)
             
-        combined_img = np.concatenate(row_images, axis=0)
+        combined_img = np.concatenate(row_blocks, axis=0)
         combined_frames.append(combined_img)
         
     imageio.mimsave(output_path, combined_frames, fps=10, loop=0)
